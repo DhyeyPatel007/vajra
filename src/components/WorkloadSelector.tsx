@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Play, Loader2, Sparkles } from "lucide-react";
+import { Play, Loader2 } from "lucide-react";
 import { WorkloadId } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
 
@@ -21,6 +21,7 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
   statusLabel,
 }) => {
   const workloadIds: WorkloadId[] = ["matmul", "softmax", "conv1d", "sobel"];
+  const indexTags = ["W.01", "W.02", "W.03", "W.04"];
 
   const formatFlops = (flops: number): string => {
     if (flops >= 1e9) return `${(flops / 1e9).toFixed(1)}G FLOPs`;
@@ -29,16 +30,16 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
   };
 
   const formatBytes = (bytes: number): string => {
-    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB moved`;
-    return `${(bytes / 1024).toFixed(1)} KB moved`;
+    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
   return (
-    <div className="border-b border-[#262A34] bg-[#0B0C0E] px-4 py-3 sm:px-6">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
-        {/* Tabs */}
-        <div className="flex flex-wrap items-center gap-2">
-          {workloadIds.map((id) => {
+    <div className="border-b border-[#242936] bg-[#07080A] px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        {/* 4 Workload Cells in 1px Hairline Grid */}
+        <div className="grid flex-1 grid-cols-2 divide-x divide-y divide-[#242936] border border-[#242936] bg-[#0E1014] sm:grid-cols-4 sm:divide-y-0">
+          {workloadIds.map((id, index) => {
             const spec = WORKLOADS[id];
             const isSelected = id === selectedId;
 
@@ -47,25 +48,33 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
                 key={id}
                 onClick={() => !isRunning && onSelect(id)}
                 disabled={isRunning}
-                className={`flex flex-col items-start rounded border px-3 py-2 text-left transition-all ${
+                className={`relative flex flex-col justify-between p-3.5 text-left transition-colors ${
                   isSelected
-                    ? "border-[#D4AF37] bg-[#181B22] text-[#F3F4F6]"
-                    : "border-[#262A34] bg-[#121418] text-[#9CA3AF] hover:border-[#383E4D] hover:text-[#F3F4F6]"
+                    ? "bg-[#151921] text-[#F4F6F8]"
+                    : "bg-[#0E1014] text-[#8E96A8] hover:bg-[#12151C] hover:text-[#F4F6F8]"
                 } ${isRunning ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
               >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-xs font-bold ${
-                      isSelected ? "text-[#D4AF37]" : "text-[#F3F4F6]"
-                    }`}
-                  >
-                    {spec.shortName}
+                {/* Active Top Accent Line */}
+                {isSelected && (
+                  <span className="absolute inset-x-0 top-0 h-[3px] bg-[#E5B842]" />
+                )}
+
+                <div className="flex items-center justify-between gap-1">
+                  <span className={`font-mono text-[10px] font-bold tracking-wider ${
+                    isSelected ? "text-[#E5B842]" : "text-[#5E6678]"
+                  }`}>
+                    {indexTags[index]}
                   </span>
-                  <span className="font-mono text-[11px] text-[#9CA3AF]">
+                  <span className="font-mono text-[11px] text-[#8E96A8]">
                     {spec.dimensionsLabel}
                   </span>
                 </div>
-                <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-[#9CA3AF]">
+
+                <div className="mt-1 font-sans text-sm font-bold text-[#F4F6F8]">
+                  {spec.shortName}
+                </div>
+
+                <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-[#8E96A8]">
                   <span>{formatFlops(spec.totalFlops)}</span>
                   <span>•</span>
                   <span>{formatBytes(spec.totalBytesMoved)}</span>
@@ -75,31 +84,31 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
           })}
         </div>
 
-        {/* CTA Button */}
-        <div className="flex items-center gap-3">
+        {/* Primary Action Button (Tune on My GPU) */}
+        <div className="flex shrink-0 items-center gap-3">
           {statusLabel && (
-            <span className="font-mono text-xs text-[#D4AF37] animate-pulse">
+            <div className="font-mono text-xs text-[#E5B842] animate-pulse">
               {statusLabel}
-            </span>
+            </div>
           )}
           <button
             onClick={onTune}
             disabled={isRunning}
-            className={`flex items-center gap-2 rounded px-4 py-2.5 text-xs font-bold tracking-wide uppercase transition-all ${
+            className={`flex items-center justify-center gap-2 px-6 py-4 font-mono text-xs font-bold uppercase tracking-[0.12em] transition-all ${
               isRunning
-                ? "bg-[#262A34] text-[#9CA3AF] cursor-not-allowed"
-                : "bg-[#D4AF37] text-[#0B0C0E] hover:bg-[#F5C542] active:scale-95 shadow-sm"
+                ? "bg-[#242936] text-[#8E96A8] cursor-not-allowed"
+                : "bg-[#E5B842] text-[#07080A] hover:bg-[#F5C542] active:translate-y-0.5"
             }`}
           >
             {isRunning ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Benchmarking...</span>
+                <Loader2 className="h-4 w-4 animate-spin text-[#07080A]" />
+                <span>BENCHMARKING...</span>
               </>
             ) : (
               <>
-                <Play className="h-4 w-4 fill-current" />
-                <span>Tune on My GPU</span>
+                <Play className="h-4 w-4 fill-current text-[#07080A]" />
+                <span>TUNE ON MY GPU</span>
               </>
             )}
           </button>

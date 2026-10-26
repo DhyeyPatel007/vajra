@@ -134,9 +134,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
       },
       {
         id: "variant-b",
-        name: "Variant B: 256-Thread Workgroup + Cached Exponentials",
+        name: "Variant B: 256-Thread Hoisted Reciprocal",
         strategy: "shared_memory_tiling",
-        rationale: "256-thread workgroup architecture caching row statistics to avoid redundant global memory accesses.",
+        rationale: "Expands workgroup to 256 threads and hoists reciprocal invSum = 1.0 / sumExp outside the normalization pass to eliminate per-element FP32 division.",
         status: "VERIFIED_RUNNER_UP",
         workgroupSize: [256, 1, 1],
         dispatchGrid: [4, 1, 1],

@@ -8,6 +8,29 @@ export type VariantStrategy =
   | "shared_memory_tiling"
   | "vec4_vectorized";
 
+export function getStrategyBadgeLabel(
+  strategy: VariantStrategy,
+  workloadId?: WorkloadId,
+  variantName?: string
+): string {
+  if (
+    strategy === "vec4_vectorized" &&
+    (workloadId === "sobel" || variantName?.toLowerCase().includes("vec3"))
+  ) {
+    return "Vec3 Vectorized SIMD";
+  }
+  if (strategy === "vec4_vectorized") {
+    return "Vec4 Vectorized SIMD";
+  }
+  if (strategy === "shared_memory_tiling") {
+    return "Shared Memory Tiling";
+  }
+  if (strategy === "workgroup_tuning") {
+    return "Workgroup Geometry";
+  }
+  return "Naive Reference";
+}
+
 export type VariantStatus =
   | "IDLE"
   | "GENERATING"

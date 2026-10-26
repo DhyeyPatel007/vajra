@@ -8,26 +8,35 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ["var(--font-sans)", "Space Grotesk", "sans-serif"],
+        mono: ["var(--font-mono)", "JetBrains Mono", "monospace"],
+      },
       colors: {
-        background: "#0B0C0E",
-        surface: "#121418",
-        panel: "#181B22",
-        border: "#262A34",
+        canvas: "#07080A",
+        surface: "#0E1014",
+        well: "#0A0C0F",
+        elevated: "#151921",
+        gridline: "#242936",
         gold: {
-          DEFAULT: "#D4AF37",
+          DEFAULT: "#E5B842",
           bright: "#F5C542",
-          dim: "#8A7322",
+          dim: "#8A6D1F",
+          dark: "#171308",
         },
-        charcoal: {
-          950: "#07080A",
-          900: "#0B0C0E",
-          850: "#121418",
-          800: "#181B22",
-          700: "#262A34",
-          600: "#383E4D",
+        slate: {
+          primary: "#F4F6F8",
+          secondary: "#8E96A8",
+          muted: "#5E6678",
         },
-        verified: "#10B981",
-        failed: "#EF4444",
+        verified: {
+          DEFAULT: "#10B981",
+          bg: "#09221B",
+        },
+        failed: {
+          DEFAULT: "#F43F5E",
+          bg: "#280B12",
+        },
       },
     },
   },

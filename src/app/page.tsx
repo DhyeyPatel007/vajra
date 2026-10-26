@@ -3,7 +3,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   HardwareProbeInfo,
-  TimingMethod,
   VariantExecutionResult,
   WorkloadId,
   GenerateResponse,
@@ -25,10 +24,10 @@ import { GflopsChart } from "@/components/GflopsChart";
 import { SiliconReportCard } from "@/components/SiliconReportCard";
 import { VariantCardGrid } from "@/components/VariantCardGrid";
 import { WgslInspector } from "@/components/WgslInspector";
-import { AlertTriangle, RotateCcw, ShieldAlert, Cpu } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 
 export default function VajraDashboard() {
-  // Environment & Hardware state
+  // Environment & Hardware probe
   const [probe, setProbe] = useState<HardwareProbeInfo>({
     supported: false,
     adapterDescription: "Probing Silicon...",
@@ -63,46 +62,177 @@ export default function VajraDashboard() {
   const [activeModelId, setActiveModelId] = useState<string>("mock-nemotron-local");
   const [usedFallbackModel, setUsedFallbackModel] = useState<boolean>(false);
 
-  // Helper to load recorded fallback benchmarks
-  const loadRecordedBenchmark = useCallback((workloadId: WorkloadId) => {
-    const recorded = RECORDED_BENCHMARKS[workloadId];
-    if (recorded) {
-      setBaselineResult(recorded.baseline);
-      setVariantResults(recorded.variants);
-      const winner = recorded.variants.find((v) => v.isWinner) || recorded.baseline;
-      setWinnerResult(winner);
-      setSelectedInspectId(winner.id);
+  // Helper to load recorded fallback benchmarks statically or with simulation
+  const loadRecordedBenchmark = useCallback(
+    (workloadId: WorkloadId, simError: boolean = false) => {
+      const recorded = RECORDED_BENCHMARKS[workloadId];
+      if (!recorded) return;
+
+      const base = { ...recorded.baseline };
+      const rawVariants = recorded.variants.map((v) => ({ ...v }));
+
+      if (simError) {
+        // Variant C fails compilation in simulation
+        const updatedVariants = rawVariants.map((v) => {
+          if (v.id === "variant-c") {
+            return {
+              ...v,
+              status: "COMPILE_FAILED" as const,
+              verified: false,
+              isWinner: false,
+              gflops: null,
+              medianTimeMs: null,
+              derivedBandwidthGBps: null,
+              speedupVsBaseline: null,
+              compileErrors: [
+                "Line 18:14 — error: unresolved call target 'unknown_intrinsic_fn(u32)'",
+              ],
+              fullWgslCode: `${v.fullWgslCode}\n\n// INJECTED FAULT FOR DEMO:\nlet broken: vec4<f32> = unknown_intrinsic_fn(gid.x);`,
+            };
+          }
+          if (v.id === "variant-b") {
+            return {
+              ...v,
+              status: "VERIFIED_WINNER" as const,
+              isWinner: true,
+            };
+          }
+          return {
+            ...v,
+            isWinner: false,
+          };
+        });
+
+        setBaselineResult(base);
+        setVariantResults(updatedVariants);
+        const champion = updatedVariants.find((v) => v.id === "variant-b") || base;
+        setWinnerResult(champion);
+        setSelectedInspectId(champion.id);
+      } else {
+        setBaselineResult(base);
+        setVariantResults(rawVariants);
+        const champion = rawVariants.find((v) => v.isWinner) || base;
+        setWinnerResult(champion);
+        setSelectedInspectId(champion.id);
+      }
+
       setActiveModelSource("mock");
       setActiveModelId("Apple M3 Max Reference (Chrome 142)");
       setUsedFallbackModel(false);
       setApiError(null);
-    }
-  }, []);
+    },
+    []
+  );
+
+  // Replay recorded benchmark with visual state machine animations
+  const replayRecordedPipeline = useCallback(
+    async (workloadId: WorkloadId, simError: boolean) => {
+      const recorded = RECORDED_BENCHMARKS[workloadId];
+      if (!recorded) return;
+
+      setIsRunning(true);
+      setApiError(null);
+
+      // Baseline setup
+      setBaselineResult(recorded.baseline);
+      setWinnerResult(recorded.baseline);
+      setSelectedInspectId("baseline");
+
+      // Stage 1: GENERATING
+      setStatusMessage("GENERATING VARIANTS VIA RECORDED SPEC...");
+      setVariantResults(
+        recorded.variants.map((v) => ({
+          ...v,
+          status: "GENERATING",
+          gflops: null,
+          medianTimeMs: null,
+          speedupVsBaseline: null,
+          isWinner: false,
+        }))
+      );
+      await new Promise((r) => setTimeout(r, 120));
+
+      // Stage 2: COMPILING
+      setStatusMessage("VALIDATING WGSL COMPILATION...");
+      if (simError) {
+        setVariantResults((prev) =>
+          prev.map((v) => {
+            if (v.id === "variant-c") {
+              return {
+                ...v,
+                status: "COMPILE_FAILED",
+                verified: false,
+                isWinner: false,
+                gflops: null,
+                medianTimeMs: null,
+                derivedBandwidthGBps: null,
+                speedupVsBaseline: null,
+                compileErrors: [
+                  "Line 18:14 — error: unresolved call target 'unknown_intrinsic_fn(u32)'",
+                ],
+                fullWgslCode: `${v.fullWgslCode}\n\n// INJECTED FAULT:\nlet broken: vec4<f32> = unknown_intrinsic_fn(gid.x);`,
+              };
+            }
+            return { ...v, status: "COMPILING" };
+          })
+        );
+      } else {
+        setVariantResults((prev) => prev.map((v) => ({ ...v, status: "COMPILING" })));
+      }
+      await new Promise((r) => setTimeout(r, 120));
+
+      // Stage 3: VERIFYING
+      setStatusMessage("VERIFYING NUMERICAL TOLERANCE (< 1e-4)...");
+      setVariantResults((prev) =>
+        prev.map((v) =>
+          v.id === "variant-c" && simError ? v : { ...v, status: "VERIFYING" }
+        )
+      );
+      await new Promise((r) => setTimeout(r, 120));
+
+      // Stage 4: BENCHMARKING
+      setStatusMessage("BENCHMARKING SILICON RUNS (9-RUN MEDIAN)...");
+      setVariantResults((prev) =>
+        prev.map((v) =>
+          v.id === "variant-c" && simError ? v : { ...v, status: "BENCHMARKING" }
+        )
+      );
+      await new Promise((r) => setTimeout(r, 140));
+
+      // Final settling on recorded reference data
+      setStatusMessage("");
+      loadRecordedBenchmark(workloadId, simError);
+      setIsRunning(false);
+    },
+    [loadRecordedBenchmark]
+  );
 
   // Main closed-loop WebGPU benchmark pipeline
   const runPipeline = useCallback(
     async (workloadId: WorkloadId, mock: boolean, simError: boolean) => {
-      // If WebGPU is not supported or user requested fallback preview
-      if (!probe.supported || previewNoWebGpu || !webGpuCtxRef.current) {
-        loadRecordedBenchmark(workloadId);
+      const isRecorded = !probe.supported || previewNoWebGpu || !webGpuCtxRef.current;
+
+      // Fix 1: When in recorded mode, do NOT return early as a no-op!
+      if (isRecorded) {
+        await replayRecordedPipeline(workloadId, simError);
         return;
       }
 
-      const ctx = webGpuCtxRef.current;
+      const ctx = webGpuCtxRef.current!;
       const device = ctx.device;
       const workload = WORKLOADS[workloadId];
       const runner = new WebGpuBenchmarkRunner(device, probe.supportsTimestampQuery);
 
       setIsRunning(true);
       setApiError(null);
-      setStatusMessage("Allocating buffers & inputs...");
+      setStatusMessage("ALLOCATING BUFFERS & DETERMINISTIC INPUTS...");
 
       try {
         // Step 1: Generate deterministic inputs
         const inputs = workload.generateInputs();
 
         // Step 2: Compile & Benchmark Naive Baseline
-        setStatusMessage("Compiling Naive Baseline...");
+        setStatusMessage("COMPILING NAIVE BASELINE...");
         const baselineCompilation = await compileShaderModule(
           device,
           workload,
@@ -120,7 +250,7 @@ export default function VajraDashboard() {
           workload.baselineWorkgroupSize
         );
 
-        setStatusMessage("Benchmarking Baseline (3 warmup + 9 timed)...");
+        setStatusMessage("BENCHMARKING BASELINE (3 WARMUP + 9 TIMED)...");
         const baselineBench = await runner.benchmarkKernel(
           baselineCompilation.pipeline,
           workload,
@@ -129,7 +259,7 @@ export default function VajraDashboard() {
         );
 
         // Read baseline output for float verification
-        setStatusMessage("Reading baseline float reference...");
+        setStatusMessage("READING BASELINE FLOAT REFERENCE...");
         const baselineOutput = await runner.runSingleExecutionAndReadback(
           baselineCompilation.pipeline,
           workload,
@@ -154,7 +284,7 @@ export default function VajraDashboard() {
           derivedBandwidthGBps: baselineBench.derivedBandwidthGBps,
           speedupVsBaseline: 1.0,
           fullWgslCode: baselineCompilation.fullWgsl,
-          isWinner: true, // Default winner until a verified variant beats it
+          isWinner: true,
         };
 
         setBaselineResult(initialBaselineResult);
@@ -164,11 +294,10 @@ export default function VajraDashboard() {
         // Step 3: Fetch 3 Variants from /api/generate
         setStatusMessage(
           mock
-            ? "Loading Nemotron Verified Mock Kernels..."
-            : "Querying NVIDIA Nemotron via Nebius Token Factory..."
+            ? "LOADING NEMOTRON VERIFIED MOCK KERNELS..."
+            : "QUERYING NVIDIA NEMOTRON VIA NEBIUS TOKEN FACTORY..."
         );
 
-        // Pre-populate cards in GENERATING state
         setVariantResults([
           {
             id: "variant-a",
@@ -264,9 +393,8 @@ export default function VajraDashboard() {
           const rawVariant = genData.variants[i];
           const variantId = rawVariant.id;
 
-          setStatusMessage(`Compiling ${rawVariant.name}...`);
+          setStatusMessage(`COMPILING ${rawVariant.name.toUpperCase()}...`);
 
-          // Update card state: COMPILING
           setVariantResults((prev) =>
             prev.map((v) =>
               v.id === variantId ? { ...v, status: "COMPILING" } : v
@@ -280,7 +408,7 @@ export default function VajraDashboard() {
           );
 
           if (!compilation.ok || !compilation.pipeline) {
-            // Drop compile failures cleanly!
+            // Drop compile failures cleanly
             const failedResult: VariantExecutionResult = {
               id: variantId,
               name: rawVariant.name,
@@ -304,10 +432,9 @@ export default function VajraDashboard() {
             setVariantResults((prev) =>
               prev.map((v) => (v.id === variantId ? failedResult : v))
             );
-            continue; // Proceed to next variant without crashing
+            continue;
           }
 
-          // Compilation passed: compute dispatch grid
           const dispatchGrid = computeDispatchGrid(
             workload.problemDims,
             rawVariant.workgroupSize,
@@ -315,7 +442,7 @@ export default function VajraDashboard() {
           );
 
           // Step 5: Numerical Tolerance Verification
-          setStatusMessage(`Verifying floats for ${rawVariant.name}...`);
+          setStatusMessage(`VERIFYING FLOATS FOR ${rawVariant.name.toUpperCase()}...`);
           setVariantResults((prev) =>
             prev.map((v) =>
               v.id === variantId ? { ...v, status: "VERIFYING" } : v
@@ -332,7 +459,6 @@ export default function VajraDashboard() {
           const verification = verifyFloatArrays(baselineOutput, variantOutput, 1e-4);
 
           if (!verification.verified) {
-            // Drop verification failures cleanly!
             const verifyFailedResult: VariantExecutionResult = {
               id: variantId,
               name: rawVariant.name,
@@ -360,7 +486,7 @@ export default function VajraDashboard() {
           }
 
           // Step 6: Hardware Benchmarking (3 warmup + 9 timed runs)
-          setStatusMessage(`Benchmarking ${rawVariant.name} (9 timed runs)...`);
+          setStatusMessage(`BENCHMARKING ${rawVariant.name.toUpperCase()} (9 RUNS)...`);
           setVariantResults((prev) =>
             prev.map((v) =>
               v.id === variantId ? { ...v, status: "BENCHMARKING" } : v
@@ -406,7 +532,7 @@ export default function VajraDashboard() {
         }
 
         // Step 7: Winner Selection
-        setStatusMessage("Crowning Fastest Kernel...");
+        setStatusMessage("CROWNING FASTEST KERNEL...");
         const verifiedCandidates = currentVariants.filter(
           (v) => v.verified && v.medianTimeMs !== null
         );
@@ -414,7 +540,6 @@ export default function VajraDashboard() {
         let champion: VariantExecutionResult = initialBaselineResult;
 
         if (verifiedCandidates.length > 0) {
-          // Sort by medianTimeMs ascending (lowest execution time wins)
           verifiedCandidates.sort((a, b) => (a.medianTimeMs || 0) - (b.medianTimeMs || 0));
           const bestVariant = verifiedCandidates[0];
 
@@ -427,7 +552,6 @@ export default function VajraDashboard() {
           }
         }
 
-        // Update champion flags
         const finalVariants = currentVariants.map((v) => ({
           ...v,
           isWinner: v.id === champion.id,
@@ -455,7 +579,7 @@ export default function VajraDashboard() {
         setIsRunning(false);
       }
     },
-    [probe, previewNoWebGpu, loadRecordedBenchmark]
+    [probe, previewNoWebGpu, replayRecordedPipeline]
   );
 
   // Initialize WebGPU on mount
@@ -471,12 +595,10 @@ export default function VajraDashboard() {
         webGpuCtxRef.current = probeRes.context;
       }
 
-      // If WebGPU is supported, run the default matmul workload automatically on first paint!
       if (probeRes.supported && probeRes.context) {
         runPipeline("matmul", true, false);
       } else {
-        // Fall back to recorded reference benchmark
-        loadRecordedBenchmark("matmul");
+        loadRecordedBenchmark("matmul", false);
       }
     }
 
@@ -487,17 +609,13 @@ export default function VajraDashboard() {
     };
   }, []);
 
-  // Handle Workload Change
+  // Handle Workload Tab Change
   const handleSelectWorkload = (id: WorkloadId) => {
     setSelectedWorkloadId(id);
-    if (!probe.supported || previewNoWebGpu) {
-      loadRecordedBenchmark(id);
-    } else {
-      runPipeline(id, isMockMode, simulateCompileError);
-    }
+    runPipeline(id, isMockMode, simulateCompileError);
   };
 
-  // Handle Tune Action
+  // Handle Tune Action Trigger
   const handleTune = () => {
     runPipeline(selectedWorkloadId, isMockMode, simulateCompileError);
   };
@@ -506,7 +624,7 @@ export default function VajraDashboard() {
   const handleTogglePreviewNoWebGpu = (preview: boolean) => {
     setPreviewNoWebGpu(preview);
     if (preview) {
-      loadRecordedBenchmark(selectedWorkloadId);
+      loadRecordedBenchmark(selectedWorkloadId, simulateCompileError);
     } else if (probe.supported && webGpuCtxRef.current) {
       runPipeline(selectedWorkloadId, isMockMode, simulateCompileError);
     }
@@ -515,8 +633,8 @@ export default function VajraDashboard() {
   const activeWorkloadSpec = WORKLOADS[selectedWorkloadId];
 
   return (
-    <div className="min-h-screen bg-[#0B0C0E] text-[#F3F4F6]">
-      {/* 1. Header & Navigation */}
+    <div className="min-h-screen bg-[#07080A] text-[#F4F6F8]">
+      {/* 1. Industrial Header Strip */}
       <TopBar
         probe={probe}
         isMockMode={isMockMode}
@@ -527,9 +645,7 @@ export default function VajraDashboard() {
         simulateCompileError={simulateCompileError}
         onToggleSimulateCompileError={(val) => {
           setSimulateCompileError(val);
-          if (isMockMode) {
-            runPipeline(selectedWorkloadId, isMockMode, val);
-          }
+          runPipeline(selectedWorkloadId, isMockMode, val);
         }}
         previewNoWebGpu={previewNoWebGpu}
         onTogglePreviewNoWebGpu={handleTogglePreviewNoWebGpu}
@@ -537,7 +653,7 @@ export default function VajraDashboard() {
         usedFallbackModel={usedFallbackModel}
       />
 
-      {/* 2. Workload Selector Bar */}
+      {/* 2. Architectural Workload Selector Bar */}
       <WorkloadSelector
         selectedId={selectedWorkloadId}
         onSelect={handleSelectWorkload}
@@ -546,19 +662,19 @@ export default function VajraDashboard() {
         statusLabel={statusMessage}
       />
 
-      {/* 3. API Error Banner (if Live Model or Super/Ultra fails) */}
+      {/* 3. API Error Banner */}
       {apiError && (
         <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
-          <div className="rounded border border-[#EF4444] bg-[#181B22] p-4 text-xs text-[#F3F4F6]">
-            <div className="flex items-start justify-between gap-3">
+          <div className="border border-[#F43F5E] bg-[#160B0E] p-4 font-mono text-xs text-[#F4F6F8]">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-start gap-2.5">
-                <ShieldAlert className="h-5 w-5 shrink-0 text-[#EF4444]" />
+                <ShieldAlert className="h-5 w-5 shrink-0 text-[#F43F5E]" />
                 <div>
-                  <div className="font-bold text-[#EF4444]">
-                    Generation Failed: {apiError.error}
+                  <div className="font-bold text-[#F43F5E]">
+                    GENERATION FAILED: {apiError.error}
                   </div>
                   {apiError.details && (
-                    <div className="mt-1 font-mono text-[11px] text-[#9CA3AF]">
+                    <div className="mt-1 text-[11px] text-[#8E96A8]">
                       {apiError.details}
                     </div>
                   )}
@@ -567,7 +683,7 @@ export default function VajraDashboard() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => runPipeline(selectedWorkloadId, false, false)}
-                  className="rounded border border-[#EF4444] bg-[#EF4444] px-3 py-1 text-xs font-bold text-[#F3F4F6] hover:bg-opacity-90"
+                  className="border border-[#F43F5E] bg-[#F43F5E] px-3.5 py-1.5 font-mono text-xs font-bold uppercase text-[#07080A]"
                 >
                   Retry Live Generation
                 </button>
@@ -576,7 +692,7 @@ export default function VajraDashboard() {
                     setIsMockMode(true);
                     runPipeline(selectedWorkloadId, true, false);
                   }}
-                  className="rounded border border-[#262A34] bg-[#121418] px-3 py-1 text-xs font-semibold text-[#D4AF37] hover:border-[#D4AF37]"
+                  className="border border-[#242936] bg-[#0E1014] px-3.5 py-1.5 font-mono text-xs font-bold uppercase text-[#E5B842] hover:border-[#8A6D1F]"
                 >
                   Fall Back to Mock Kernels
                 </button>
@@ -586,10 +702,10 @@ export default function VajraDashboard() {
         </div>
       )}
 
-      {/* 4. Hero Section: Live GFLOPS Chart + Silicon Report Card */}
+      {/* 4. Hero Section: Oscilloscope GFLOPS Chart + Silicon Report Card */}
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 space-y-6">
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Left: 7 Columns GFLOPS Chart */}
+          {/* Left: 7 Columns GFLOPS Oscilloscope Plot */}
           <div className="lg:col-span-7">
             <GflopsChart
               baseline={baselineResult}
@@ -598,7 +714,7 @@ export default function VajraDashboard() {
             />
           </div>
 
-          {/* Right: 5 Columns Silicon Report Card */}
+          {/* Right: 5 Columns Locked Winner Telemetry Sheet */}
           <div className="lg:col-span-5">
             <SiliconReportCard
               winner={winnerResult}
@@ -615,18 +731,19 @@ export default function VajraDashboard() {
                   ? "Apple M3 Max (Reference)"
                   : probe.adapterDescription
               }
+              workloadId={selectedWorkloadId}
             />
           </div>
         </section>
 
-        {/* 5. Pipeline Variant Status Cards Grid */}
+        {/* 5. 4-Column Pipeline Telemetry Cards Grid */}
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-[#9CA3AF]">
-              Pipeline Execution & Numerical Verification (4 Variants)
+          <div className="mb-3 flex items-center justify-between border-b border-[#242936] pb-2 font-mono text-xs">
+            <h2 className="font-bold uppercase tracking-wider text-[#8E96A8]">
+              02 // PIPELINE EXECUTION & NUMERICAL VERIFICATION (4 VARIANTS)
             </h2>
-            <span className="font-mono text-xs text-[#D4AF37]">
-              Tolerance: maxRelativeError &lt; 1e-4
+            <span className="text-[#E5B842]">
+              TOLERANCE: MAX_REL_ERROR &lt; 1e-4
             </span>
           </div>
 
@@ -635,10 +752,11 @@ export default function VajraDashboard() {
             variants={variantResults}
             selectedInspectId={selectedInspectId}
             onSelectVariantForInspect={(variant) => setSelectedInspectId(variant.id)}
+            workloadId={selectedWorkloadId}
           />
         </section>
 
-        {/* 6. Bottom Panel: Full WGSL Code Inspector */}
+        {/* 6. Terminal Shader Deck (WGSL Inspector) */}
         <section>
           <WgslInspector
             variants={variantResults}
@@ -650,16 +768,16 @@ export default function VajraDashboard() {
         </section>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-[#262A34] bg-[#07080A] py-6 text-center text-xs text-[#9CA3AF]">
+      {/* Industrial Footer */}
+      <footer className="border-t border-[#242936] bg-[#0E1014] py-6 font-mono text-xs text-[#8E96A8]">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-[#D4AF37]">VAJRA</span>
-            <span>—</span>
-            <span>Zero-Install Browser-Native WebGPU Auto-Tuner</span>
+            <span className="font-bold text-[#E5B842]">VAJRA</span>
+            <span className="text-[#5E6678]">//</span>
+            <span>ZERO-INSTALL BROWSER-NATIVE WEBGPU AUTO-TUNER</span>
           </div>
-          <div>
-            Built with NVIDIA Nemotron via Nebius Token Factory for the Global AI Hackathon.
+          <div className="text-[#5E6678]">
+            BUILT WITH NVIDIA NEMOTRON VIA NEBIUS TOKEN FACTORY FOR THE GLOBAL AI HACKATHON.
           </div>
         </div>
       </footer>

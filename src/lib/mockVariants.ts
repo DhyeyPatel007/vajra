@@ -244,10 +244,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     },
     {
       id: "variant-b",
-      name: "Variant B: 256-Thread Workgroup + Cached Exponentials",
+      name: "Variant B: 256-Thread Hoisted Reciprocal",
       strategy: "shared_memory_tiling",
       rationale:
-        "256-thread workgroup architecture with two-pass online normalization caching row statistics to avoid DRAM thrashing.",
+        "Expands workgroup to 256 threads and hoists reciprocal invSum = 1.0 / sumExp outside the normalization pass to eliminate per-element FP32 division.",
       workgroupSize: [256, 1, 1],
       elementsPerThread: [1, 1, 1],
       wgslBody: `@compute @workgroup_size(256, 1, 1)
