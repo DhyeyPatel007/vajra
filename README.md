@@ -188,7 +188,7 @@ $$\text{Uplift \%} = \frac{\text{GFLOPS}_{\text{Variant D}} - \text{GFLOPS}_{\te
 | **Sobel** | Variant D: Gen 2 18x18 Halo Tile + Scalar FMA Stencil | **276.8 GFLOPS** | **4.11x** | 0.273 ms | 122.91 GB/s | **+14.4% vs Winner C** | $1.19 \times 10^{-7}$ |
 
 *Mechanic Assertions:*
-- SGEMM Variant D pairs $16 \times 16$ shared memory tiles with explicit 4-way fused multiply-add (`fma`) unrolling. It does not use double-buffered shared tile memory.
+- SGEMM Variant D pairs $16 \times 16$ shared memory tiles with explicit 4-way fused multiply-add (`fma`) unrolling. It uses standard single-buffered shared tiles without register coarsening.
 - Softmax Variant D executes a true 2-pass online max and rescaled sum reduction in Pass 1, followed by vectorized reciprocal multiplication in Pass 2, cutting global memory passes from 3 to 2.
 - Sobel Variant D pairs $18 \times 18$ shared memory apron tiling with scalar stencil differences and `fma` gradient magnitude accumulation.
 
