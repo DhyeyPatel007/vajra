@@ -3,26 +3,26 @@
 @tailwind utilities;
 
 :root {
-  --canvas: #07080A;
-  --surface: #0E1014;
-  --well: #0A0C0F;
-  --elevated: #151921;
-  --border-hairline: #242936;
-  --border-gold: #8A6D1F;
-  --gold-signal: #E5B842;
-  --gold-bright: #F5C542;
-  --text-primary: #F4F6F8;
-  --text-secondary: #8E96A8;
-  --text-index: #5E6678;
-  --verified-green: #10B981;
-  --verified-bg: #09221B;
-  --error-red: #F43F5E;
-  --error-bg: #280B12;
+  --canvas: #0F1419;
+  --surface: #161D24;
+  --well: #11171D;
+  --elevated: #1E2730;
+  --border-structural: #2A3542;
+  --amber-primary: #F59E0B;
+  --amber-hover: #FBBF24;
+  --amber-tint: #291F0E;
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --verified-emerald: #10B981;
+  --verified-tint: #0B261F;
+  --danger-rose: #F43F5E;
+  --danger-tint: #2A1219;
 }
 
 body {
-  background-color: #07080A;
-  color: #F4F6F8;
+  background-color: #0F1419;
+  color: #F1F5F9;
   font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -35,17 +35,18 @@ body {
 
 /* Crisp technical scrollbars */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0A0C0F;
+  background: #11171D;
 }
 ::-webkit-scrollbar-thumb {
-  background: #242936;
+  background: #2A3542;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #8A6D1F;
+  background: #F59E0B;
 }
 
 /* Monospace font styling */

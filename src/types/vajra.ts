@@ -6,13 +6,18 @@ export type VariantStrategy =
   | "baseline"
   | "workgroup_tuning"
   | "shared_memory_tiling"
-  | "vec4_vectorized";
+  | "vec4_vectorized"
+  | "gen2_evolved";
 
 export function getStrategyBadgeLabel(
   strategy: VariantStrategy,
   workloadId?: WorkloadId,
-  variantName?: string
+  variantName?: string,
+  sharedMemoryBytes?: number
 ): string {
+  if (strategy === "gen2_evolved") {
+    return "Gen 2 Evolved Kernel";
+  }
   if (
     strategy === "vec4_vectorized" &&
     (workloadId === "sobel" || variantName?.toLowerCase().includes("vec3"))
@@ -21,6 +26,12 @@ export function getStrategyBadgeLabel(
   }
   if (strategy === "vec4_vectorized") {
     return "Vec4 Vectorized SIMD";
+  }
+  if (
+    strategy === "shared_memory_tiling" &&
+    (workloadId === "softmax" || sharedMemoryBytes === 0)
+  ) {
+    return "Hoisted Reciprocal Math";
   }
   if (strategy === "shared_memory_tiling") {
     return "Shared Memory Tiling";
@@ -70,17 +81,20 @@ export interface WorkloadSpec {
 }
 
 export interface GeneratedVariant {
-  id: "variant-a" | "variant-b" | "variant-c";
+  id: "variant-a" | "variant-b" | "variant-c" | "variant-d";
   name: string;
   strategy: VariantStrategy;
   rationale: string;
   workgroupSize: [number, number, number];
   elementsPerThread: [number, number, number];
   wgslBody: string;
+  generation?: 1 | 2;
+  parentWinnerId?: string;
+  sharedMemoryBytes?: number;
 }
 
 export interface VariantExecutionResult {
-  id: "baseline" | "variant-a" | "variant-b" | "variant-c";
+  id: "baseline" | "variant-a" | "variant-b" | "variant-c" | "variant-d";
   name: string;
   strategy: VariantStrategy;
   rationale: string;
@@ -97,12 +111,21 @@ export interface VariantExecutionResult {
   speedupVsBaseline: number | null;
   fullWgslCode: string;
   isWinner: boolean;
+  generation?: 1 | 2;
+  sharedMemoryBytes?: number;
+  elementsPerThread?: [number, number, number];
+  iqrMs?: number;
+  stabilityPct?: number;
+  parentWinnerId?: string;
 }
 
 export interface GenerateRequest {
   workloadId: WorkloadId;
   mockMode?: boolean;
   simulateCompileError?: boolean;
+  generation?: 1 | 2;
+  previousWinner?: VariantExecutionResult;
+  failedVariants?: VariantExecutionResult[];
 }
 
 export interface GenerateResponse {

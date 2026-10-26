@@ -32,6 +32,319 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   });
 }
 
+export function getGen2MockVariant(
+  workloadId: WorkloadId,
+  parentWinnerId: string = "variant-c"
+): GeneratedVariant {
+  switch (workloadId) {
+    case "matmul":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 Shared Tile + Unrolled FMA Pipeline",
+        strategy: "gen2_evolved",
+        rationale:
+          "Replaces inner-loop vec4 dot-products with explicit 4-way fused multiply-add (fma) accumulation across 16x16 shared memory tiles (+10.7% vs Gen 1 Winner C).",
+        workgroupSize: [16, 16, 1],
+        elementsPerThread: [1, 1, 1],
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 2048,
+        wgslBody: `var<workgroup> tileA: array<f32, 256>;
+var<workgroup> tileB: array<f32, 256>;
+
+@compute @workgroup_size(16, 16, 1)
+fn main(
+  @builtin(global_invocation_id) gid: vec3<u32>,
+  @builtin(local_invocation_id) lid: vec3<u32>,
+  @builtin(workgroup_id) wid: vec3<u32>
+) {
+  let row = gid.y;
+  let col = gid.x;
+  let lx = lid.x;
+  let ly = lid.y;
+  let numTiles = (params.K + 15u) / 16u;
+  var sum: f32 = 0.0;
+
+  for (var t: u32 = 0u; t < numTiles; t = t + 1u) {
+    let aCol = t * 16u + lx;
+    if (row < params.M && aCol < params.K) {
+      tileA[ly * 16u + lx] = matrixA[row * params.K + aCol];
+    } else {
+      tileA[ly * 16u + lx] = 0.0;
+    }
+
+    let bRow = t * 16u + ly;
+    if (bRow < params.K && col < params.N) {
+      tileB[ly * 16u + lx] = matrixB[bRow * params.N + col];
+    } else {
+      tileB[ly * 16u + lx] = 0.0;
+    }
+
+    workgroupBarrier();
+
+    // 4 iterations of 4-wide dot product + FMA unrolling
+    for (var k: u32 = 0u; k < 16u; k = k + 4u) {
+      let va = vec4<f32>(
+        tileA[ly * 16u + k],
+        tileA[ly * 16u + k + 1u],
+        tileA[ly * 16u + k + 2u],
+        tileA[ly * 16u + k + 3u]
+      );
+      let vb = vec4<f32>(
+        tileB[k * 16u + lx],
+        tileB[(k + 1u) * 16u + lx],
+        tileB[(k + 2u) * 16u + lx],
+        tileB[(k + 3u) * 16u + lx]
+      );
+      sum = fma(va.x, vb.x, fma(va.y, vb.y, fma(va.z, vb.z, fma(va.w, vb.w, sum))));
+    }
+
+    workgroupBarrier();
+  }
+
+  if (row < params.M && col < params.N) {
+    matrixC[row * params.N + col] = sum;
+  }
+}`,
+      };
+
+    case "softmax":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 2-Pass Online Softmax + Vec4 Reciprocal",
+        strategy: "gen2_evolved",
+        rationale:
+          "Fuses max-finding and exponential summation into a single online rescaling sweep, cutting global memory reads from 3 passes to 2 (+14.8% vs Gen 1 Winner C; recorded M3 Max reference, live GPU re-measured on run).",
+        workgroupSize: [256, 1, 1],
+        elementsPerThread: [1, 1, 1],
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 0,
+        wgslBody: `@compute @workgroup_size(256, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let row = gid.x;
+  if (row >= params.rows) {
+    return;
+  }
+  let base = row * params.cols;
+  var maxVal: f32 = -3.402823466e+38;
+  var sumExp: f32 = 0.0;
+
+  // Pass 1: 4-wide online max and rescaled exponential sum sweep
+  let limit4 = params.cols & (~3u);
+  var c: u32 = 0u;
+  for (; c < limit4; c = c + 4u) {
+    let v = vec4<f32>(
+      inputBuf[base + c],
+      inputBuf[base + c + 1u],
+      inputBuf[base + c + 2u],
+      inputBuf[base + c + 3u]
+    );
+    let chunkMax = max(max(v.x, v.y), max(v.z, v.w));
+    if (chunkMax > maxVal) {
+      sumExp = sumExp * exp(maxVal - chunkMax);
+      maxVal = chunkMax;
+    }
+    let ev = exp(v - vec4<f32>(maxVal));
+    sumExp = sumExp + (ev.x + ev.y + ev.z + ev.w);
+  }
+
+  // Scalar remainder loop for Pass 1
+  for (; c < params.cols; c = c + 1u) {
+    let val = inputBuf[base + c];
+    if (val > maxVal) {
+      sumExp = sumExp * exp(maxVal - val) + 1.0;
+      maxVal = val;
+    } else {
+      sumExp = sumExp + exp(val - maxVal);
+    }
+  }
+
+  // Pass 2: Vectorized reciprocal normalization
+  let invSum = 1.0 / sumExp;
+  var outC: u32 = 0u;
+  for (; outC < limit4; outC = outC + 4u) {
+    let v = vec4<f32>(
+      inputBuf[base + outC],
+      inputBuf[base + outC + 1u],
+      inputBuf[base + outC + 2u],
+      inputBuf[base + outC + 3u]
+    );
+    let outVec = exp(v - vec4<f32>(maxVal)) * invSum;
+    outputBuf[base + outC] = outVec.x;
+    outputBuf[base + outC + 1u] = outVec.y;
+    outputBuf[base + outC + 2u] = outVec.z;
+    outputBuf[base + outC + 3u] = outVec.w;
+  }
+
+  for (; outC < params.cols; outC = outC + 1u) {
+    outputBuf[base + outC] = exp(inputBuf[base + outC] - maxVal) * invSum;
+  }
+}`,
+      };
+
+    case "conv1d":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 Fused Tile + Register Coarsened",
+        strategy: "gen2_evolved",
+        rationale:
+          "Evolutionary synthesis: cooperative shared signal halo and filter preloading with dual-accumulator vec4<f32> dot products.",
+        workgroupSize: [256, 1, 1],
+        elementsPerThread: [1, 1, 1],
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 1536,
+        wgslBody: `var<workgroup> sharedFilter: array<f32, 64>;
+var<workgroup> sharedSignal: array<f32, 320>;
+
+@compute @workgroup_size(256, 1, 1)
+fn main(
+  @builtin(global_invocation_id) gid: vec3<u32>,
+  @builtin(local_invocation_id) lid: vec3<u32>,
+  @builtin(workgroup_id) wid: vec3<u32>
+) {
+  let tid = lid.x;
+  let baseIdx = wid.x * 256u;
+
+  if (tid < 64u) {
+    sharedFilter[tid] = filterWeight[tid];
+  }
+
+  let globalSignalIdx = baseIdx + tid;
+  if (globalSignalIdx < params.signalLen) {
+    sharedSignal[tid] = signalIn[globalSignalIdx];
+  } else {
+    sharedSignal[tid] = 0.0;
+  }
+
+  if (tid < 64u) {
+    let haloIdx = baseIdx + 256u + tid;
+    if (haloIdx < params.signalLen) {
+      sharedSignal[256u + tid] = signalIn[haloIdx];
+    } else {
+      sharedSignal[256u + tid] = 0.0;
+    }
+  }
+
+  workgroupBarrier();
+
+  if (globalSignalIdx >= params.signalLen) {
+    return;
+  }
+
+  var acc0: f32 = 0.0;
+  var acc1: f32 = 0.0;
+  for (var k: u32 = 0u; k < 64u; k = k + 8u) {
+    let sVec0 = vec4<f32>(
+      sharedSignal[tid + k],
+      sharedSignal[tid + k + 1u],
+      sharedSignal[tid + k + 2u],
+      sharedSignal[tid + k + 3u]
+    );
+    let fVec0 = vec4<f32>(
+      sharedFilter[k],
+      sharedFilter[k + 1u],
+      sharedFilter[k + 2u],
+      sharedFilter[k + 3u]
+    );
+    acc0 = fma(sVec0.x, fVec0.x, fma(sVec0.y, fVec0.y, fma(sVec0.z, fVec0.z, fma(sVec0.w, fVec0.w, acc0))));
+
+    let sVec1 = vec4<f32>(
+      sharedSignal[tid + k + 4u],
+      sharedSignal[tid + k + 5u],
+      sharedSignal[tid + k + 6u],
+      sharedSignal[tid + k + 7u]
+    );
+    let fVec1 = vec4<f32>(
+      sharedFilter[k + 4u],
+      sharedFilter[k + 5u],
+      sharedFilter[k + 6u],
+      sharedFilter[k + 7u]
+    );
+    acc1 = fma(sVec1.x, fVec1.x, fma(sVec1.y, fVec1.y, fma(sVec1.z, fVec1.z, fma(sVec1.w, fVec1.w, acc1))));
+  }
+
+  signalOut[globalSignalIdx] = acc0 + acc1;
+}`,
+      };
+
+    case "sobel":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 18x18 Halo Tile + Scalar FMA Stencil",
+        strategy: "gen2_evolved",
+        rationale:
+          "Pairs 18x18 shared-memory apron tiling with direct scalar stencil differences and fma gradient magnitude accumulation (+14.4% vs Gen 1 Winner C).",
+        workgroupSize: [16, 16, 1],
+        elementsPerThread: [1, 1, 1],
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 1296,
+        wgslBody: `var<workgroup> sharedHaloTile: array<f32, 324>;
+
+@compute @workgroup_size(16, 16, 1)
+fn main(
+  @builtin(global_invocation_id) gid: vec3<u32>,
+  @builtin(local_invocation_id) lid: vec3<u32>,
+  @builtin(workgroup_id) wid: vec3<u32>
+) {
+  let lx = lid.x;
+  let ly = lid.y;
+  let tid = ly * 16u + lx;
+  let baseGX = wid.x * 16u;
+  let baseGY = wid.y * 16u;
+  let w = params.width;
+  let h = params.height;
+
+  for (var i: u32 = tid; i < 324u; i = i + 256u) {
+    let ty = i / 18u;
+    let tx = i % 18u;
+    let gx = min(max(i32(baseGX + tx) - 1, 0), i32(w - 1u));
+    let gy = min(max(i32(baseGY + ty) - 1, 0), i32(h - 1u));
+    sharedHaloTile[i] = imgIn[u32(gy) * w + u32(gx)];
+  }
+
+  workgroupBarrier();
+
+  let gx = gid.x;
+  let gy = gid.y;
+  if (gx >= w || gy >= h) {
+    return;
+  }
+  if (gx == 0u || gy == 0u || gx == w - 1u || gy == h - 1u) {
+    imgOut[gy * w + gx] = 0.0;
+    return;
+  }
+
+  let tx = lx + 1u;
+  let ty = ly + 1u;
+
+  let r0 = vec3<f32>(
+    sharedHaloTile[(ty - 1u) * 18u + (tx - 1u)],
+    sharedHaloTile[(ty - 1u) * 18u + tx],
+    sharedHaloTile[(ty - 1u) * 18u + (tx + 1u)]
+  );
+  let r1 = vec3<f32>(
+    sharedHaloTile[ty * 18u + (tx - 1u)],
+    sharedHaloTile[ty * 18u + tx],
+    sharedHaloTile[ty * 18u + (tx + 1u)]
+  );
+  let r2 = vec3<f32>(
+    sharedHaloTile[(ty + 1u) * 18u + (tx - 1u)],
+    sharedHaloTile[(ty + 1u) * 18u + tx],
+    sharedHaloTile[(ty + 1u) * 18u + (tx + 1u)]
+  );
+
+  let sx = (r0.z - r0.x) + 2.0 * (r1.z - r1.x) + (r2.z - r2.x);
+  let sy = (r2.x - r0.x) + 2.0 * (r2.y - r0.y) + (r2.z - r0.z);
+
+  imgOut[gy * w + gx] = sqrt(fma(sx, sx, sy * sy));
+}`,
+      };
+  }
+}
+
 const ALL_MOCK_VARIANTS: Record<WorkloadId, GeneratedVariant[]> = {
   matmul: [
     {
@@ -356,14 +669,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let kLimit = params.kernelLen & (~7u);
   var k: u32 = 0u;
   for (; k < kLimit; k = k + 8u) {
-    acc = acc + signalIn[min(idx + k, params.signalLen - 1u)] * filterWeight[k];
-    acc = acc + signalIn[min(idx + k + 1u, params.signalLen - 1u)] * filterWeight[k + 1u];
-    acc = acc + signalIn[min(idx + k + 2u, params.signalLen - 1u)] * filterWeight[k + 2u];
-    acc = acc + signalIn[min(idx + k + 3u, params.signalLen - 1u)] * filterWeight[k + 3u];
-    acc = acc + signalIn[min(idx + k + 4u, params.signalLen - 1u)] * filterWeight[k + 4u];
-    acc = acc + signalIn[min(idx + k + 5u, params.signalLen - 1u)] * filterWeight[k + 5u];
-    acc = acc + signalIn[min(idx + k + 6u, params.signalLen - 1u)] * filterWeight[k + 6u];
-    acc = acc + signalIn[min(idx + k + 7u, params.signalLen - 1u)] * filterWeight[k + 7u];
+    acc = acc + select(0.0, signalIn[idx + k], (idx + k) < params.signalLen) * filterWeight[k];
+    acc = acc + select(0.0, signalIn[idx + k + 1u], (idx + k + 1u) < params.signalLen) * filterWeight[k + 1u];
+    acc = acc + select(0.0, signalIn[idx + k + 2u], (idx + k + 2u) < params.signalLen) * filterWeight[k + 2u];
+    acc = acc + select(0.0, signalIn[idx + k + 3u], (idx + k + 3u) < params.signalLen) * filterWeight[k + 3u];
+    acc = acc + select(0.0, signalIn[idx + k + 4u], (idx + k + 4u) < params.signalLen) * filterWeight[k + 4u];
+    acc = acc + select(0.0, signalIn[idx + k + 5u], (idx + k + 5u) < params.signalLen) * filterWeight[k + 5u];
+    acc = acc + select(0.0, signalIn[idx + k + 6u], (idx + k + 6u) < params.signalLen) * filterWeight[k + 6u];
+    acc = acc + select(0.0, signalIn[idx + k + 7u], (idx + k + 7u) < params.signalLen) * filterWeight[k + 7u];
   }
   for (; k < params.kernelLen; k = k + 1u) {
     if (idx + k < params.signalLen) {
@@ -672,10 +985,6 @@ fn main(
   let kx = vec3<f32>(-1.0, 0.0, 1.0);
   let sx = dot(r0, kx) + 2.0 * dot(r1, kx) + dot(r2, kx);
 
-  let c0 = vec3<f32>(r0.x, r1.x, r2.x);
-  let c1 = vec3<f32>(r0.y, tileHalo[ty * 18u + tx], r2.y);
-  let c2 = vec3<f32>(r0.z, r1.z, r2.z);
-  let ky = vec3<f32>(-1.0, 0.0, 1.0);
   let sy = dot(vec3<f32>(r0.x, r0.y, r0.z), vec3<f32>(-1.0, -2.0, -1.0))
          + dot(vec3<f32>(r2.x, r2.y, r2.z), vec3<f32>(1.0, 2.0, 1.0));
 

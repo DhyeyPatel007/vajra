@@ -9,13 +9,14 @@ import {
   GenerateErrorResponse,
 } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
-import { RECORDED_BENCHMARKS } from "@/lib/recordedBenchmarks";
+import { RECORDED_BENCHMARKS, getGen2RecordedResult } from "@/lib/recordedBenchmarks";
 import {
   probeAndInitWebGpu,
   compileShaderModule,
   verifyFloatArrays,
   WebGpuBenchmarkRunner,
   computeDispatchGrid,
+  analyzeWgslFootprint,
   WebGpuContext,
 } from "@/lib/webgpuHarness";
 import { TopBar } from "@/components/TopBar";
@@ -24,6 +25,7 @@ import { GflopsChart } from "@/components/GflopsChart";
 import { SiliconReportCard } from "@/components/SiliconReportCard";
 import { VariantCardGrid } from "@/components/VariantCardGrid";
 import { WgslInspector } from "@/components/WgslInspector";
+import { FailureGraveyard } from "@/components/FailureGraveyard";
 import { ShieldAlert } from "lucide-react";
 
 export default function VajraDashboard() {
@@ -285,6 +287,9 @@ export default function VajraDashboard() {
           speedupVsBaseline: 1.0,
           fullWgslCode: baselineCompilation.fullWgsl,
           isWinner: true,
+          sharedMemoryBytes: 0,
+          iqrMs: baselineBench.iqrMs,
+          stabilityPct: baselineBench.stabilityPct,
         };
 
         setBaselineResult(initialBaselineResult);
@@ -505,6 +510,11 @@ export default function VajraDashboard() {
               ? initialBaselineResult.medianTimeMs / bench.medianTimeMs
               : 1.0;
 
+          const { sharedMemoryBytes: variantSharedBytes } = analyzeWgslFootprint(
+            compilation.fullWgsl,
+            rawVariant.workgroupSize
+          );
+
           const verifiedResult: VariantExecutionResult = {
             id: variantId,
             name: rawVariant.name,
@@ -523,6 +533,9 @@ export default function VajraDashboard() {
             speedupVsBaseline: speedup,
             fullWgslCode: compilation.fullWgsl,
             isWinner: false,
+            sharedMemoryBytes: variantSharedBytes,
+            iqrMs: bench.iqrMs,
+            stabilityPct: bench.stabilityPct,
           };
 
           currentVariants.push(verifiedResult);
@@ -615,10 +628,355 @@ export default function VajraDashboard() {
     runPipeline(id, isMockMode, simulateCompileError);
   };
 
-  // Handle Tune Action Trigger
+  // Handle Tune Action Trigger (Always resets to clean Gen 1 4-kernel state)
   const handleTune = () => {
     runPipeline(selectedWorkloadId, isMockMode, simulateCompileError);
   };
+
+  // Handle Refine Winner (Gen 2) Action Trigger
+  const handleRefineGen2 = useCallback(async () => {
+    const isRecorded = !probe.supported || previewNoWebGpu || !webGpuCtxRef.current;
+    const workloadId = selectedWorkloadId;
+
+    if (isRecorded) {
+      setIsRunning(true);
+      setApiError(null);
+
+      const parentWinnerId = simulateCompileError ? "variant-b" : "variant-c";
+
+      // Stage 1: GENERATING
+      setStatusMessage("SYNTHESIZING EVOLVED VARIANT D (GEN 2)...");
+      const placeholderD: VariantExecutionResult = {
+        id: "variant-d",
+        name: "Variant D: Gen 2 Fused Tile + Register Coarsened",
+        strategy: "gen2_evolved",
+        rationale: "Synthesizing fused shared memory tiling with unrolled SIMD registers...",
+        status: "GENERATING",
+        workgroupSize: [16, 16, 1],
+        dispatchGrid: [32, 32, 1],
+        compileErrors: [],
+        verified: false,
+        maxRelativeError: null,
+        medianTimeMs: null,
+        allRunTimesMs: [],
+        gflops: null,
+        derivedBandwidthGBps: null,
+        speedupVsBaseline: null,
+        fullWgslCode: "",
+        isWinner: false,
+        generation: 2,
+        parentWinnerId,
+      };
+
+      setVariantResults((prev) => [
+        ...prev.filter((v) => v.id !== "variant-d"),
+        placeholderD,
+      ]);
+      setSelectedInspectId("variant-d");
+      await new Promise((r) => setTimeout(r, 120));
+
+      // Stage 2: COMPILING
+      setStatusMessage("VALIDATING GEN 2 LIMITS & COMPILATION...");
+      setVariantResults((prev) =>
+        prev.map((v) => (v.id === "variant-d" ? { ...v, status: "COMPILING" } : v))
+      );
+      await new Promise((r) => setTimeout(r, 120));
+
+      // Stage 3: VERIFYING
+      setStatusMessage("VERIFYING GEN 2 TOLERANCE (< 1e-4)...");
+      setVariantResults((prev) =>
+        prev.map((v) => (v.id === "variant-d" ? { ...v, status: "VERIFYING" } : v))
+      );
+      await new Promise((r) => setTimeout(r, 120));
+
+      // Stage 4: BENCHMARKING
+      setStatusMessage("BENCHMARKING GEN 2 SILICON SPEEDUP (9 RUNS)...");
+      setVariantResults((prev) =>
+        prev.map((v) => (v.id === "variant-d" ? { ...v, status: "BENCHMARKING" } : v))
+      );
+      await new Promise((r) => setTimeout(r, 140));
+
+      // Settle Gen 2 recorded result
+      const gen2Winner = getGen2RecordedResult(workloadId, simulateCompileError);
+      setVariantResults((prev) => [
+        ...prev.filter((v) => v.id !== "variant-d").map((v) => ({
+          ...v,
+          isWinner: false,
+          status:
+            v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
+              ? v.status
+              : ("VERIFIED_RUNNER_UP" as const),
+        })),
+        gen2Winner,
+      ]);
+      setWinnerResult(gen2Winner);
+      setSelectedInspectId("variant-d");
+      setStatusMessage("");
+      setIsRunning(false);
+      return;
+    }
+
+    // Physical WebGPU Execution for Gen 2
+    const ctx = webGpuCtxRef.current!;
+    const device = ctx.device;
+    const workload = WORKLOADS[workloadId];
+    const runner = new WebGpuBenchmarkRunner(device, probe.supportsTimestampQuery);
+
+    setIsRunning(true);
+    setApiError(null);
+    setStatusMessage("QUERYING NEMOTRON FOR GEN 2 EVOLUTIONARY REFINEMENT...");
+
+    try {
+      const inputs = workload.generateInputs();
+
+      const baselineCompilation = await compileShaderModule(
+        device,
+        workload,
+        workload.baselineWgslBody
+      );
+      const baselineDispatchGrid = computeDispatchGrid(
+        workload.problemDims,
+        workload.baselineWorkgroupSize
+      );
+      const baselineOutput = await runner.runSingleExecutionAndReadback(
+        baselineCompilation.pipeline!,
+        workload,
+        baselineDispatchGrid,
+        inputs
+      );
+
+      const placeholderD: VariantExecutionResult = {
+        id: "variant-d",
+        name: "Variant D: Gen 2 Fused Tile + Register Coarsened",
+        strategy: "gen2_evolved",
+        rationale: "Nemotron evolutionary synthesis from Gen 1 winner...",
+        status: "GENERATING",
+        workgroupSize: [16, 16, 1],
+        dispatchGrid: [1, 1, 1],
+        compileErrors: [],
+        verified: false,
+        maxRelativeError: null,
+        medianTimeMs: null,
+        allRunTimesMs: [],
+        gflops: null,
+        derivedBandwidthGBps: null,
+        speedupVsBaseline: null,
+        fullWgslCode: "",
+        isWinner: false,
+        generation: 2,
+        parentWinnerId: winnerResult?.id,
+      };
+
+      setVariantResults((prev) => [
+        ...prev.filter((v) => v.id !== "variant-d"),
+        placeholderD,
+      ]);
+      setSelectedInspectId("variant-d");
+
+      const genRes = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workloadId,
+          mockMode: isMockMode,
+          simulateCompileError,
+          generation: 2,
+          previousWinner: winnerResult,
+          failedVariants: variantResults.filter(
+            (v) => v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
+          ),
+        }),
+      });
+
+      if (!genRes.ok) {
+        const errData = (await genRes.json().catch(() => ({}))) as GenerateErrorResponse;
+        setApiError({
+          error: errData.error || `HTTP ${genRes.status} Error from /api/generate (Gen 2)`,
+          code: errData.code || "UPSTREAM_SUPER_AND_ULTRA_FAILED",
+          retryable: true,
+          details: errData.details,
+        });
+        setIsRunning(false);
+        setStatusMessage("");
+        return;
+      }
+
+      const genData = (await genRes.json()) as GenerateResponse;
+      const rawVariant = genData.variants[0];
+
+      setStatusMessage("COMPILING EVOLVED VARIANT D ON PHYSICAL GPU...");
+      setVariantResults((prev) =>
+        prev.map((v) => (v.id === "variant-d" ? { ...v, status: "COMPILING" } : v))
+      );
+
+      const compilation = await compileShaderModule(
+        device,
+        workload,
+        rawVariant.wgslBody,
+        rawVariant.workgroupSize
+      );
+
+      if (!compilation.ok || !compilation.pipeline) {
+        const failedResult: VariantExecutionResult = {
+          id: "variant-d",
+          name: rawVariant.name,
+          strategy: rawVariant.strategy,
+          rationale: rawVariant.rationale,
+          status: "COMPILE_FAILED",
+          workgroupSize: rawVariant.workgroupSize,
+          dispatchGrid: [1, 1, 1],
+          compileErrors: compilation.errors,
+          verified: false,
+          maxRelativeError: null,
+          medianTimeMs: null,
+          allRunTimesMs: [],
+          gflops: null,
+          derivedBandwidthGBps: null,
+          speedupVsBaseline: null,
+          fullWgslCode: compilation.fullWgsl,
+          isWinner: false,
+          generation: 2,
+          parentWinnerId: rawVariant.parentWinnerId,
+          sharedMemoryBytes: compilation.sharedMemoryBytes,
+        };
+        setVariantResults((prev) => [
+          ...prev.filter((v) => v.id !== "variant-d"),
+          failedResult,
+        ]);
+        setStatusMessage("");
+        setIsRunning(false);
+        return;
+      }
+
+      const dispatchGrid = computeDispatchGrid(
+        workload.problemDims,
+        rawVariant.workgroupSize,
+        rawVariant.elementsPerThread
+      );
+
+      setStatusMessage("VERIFYING GEN 2 FLOATS (< 1e-4 TOLERANCE)...");
+      setVariantResults((prev) =>
+        prev.map((v) => (v.id === "variant-d" ? { ...v, status: "VERIFYING" } : v))
+      );
+
+      const variantOutput = await runner.runSingleExecutionAndReadback(
+        compilation.pipeline,
+        workload,
+        dispatchGrid,
+        inputs
+      );
+
+      const verification = verifyFloatArrays(baselineOutput, variantOutput, 1e-4);
+
+      if (!verification.verified) {
+        const verifyFailedResult: VariantExecutionResult = {
+          id: "variant-d",
+          name: rawVariant.name,
+          strategy: rawVariant.strategy,
+          rationale: rawVariant.rationale,
+          status: "VERIFY_FAILED",
+          workgroupSize: rawVariant.workgroupSize,
+          dispatchGrid,
+          compileErrors: [],
+          verified: false,
+          maxRelativeError: verification.maxRelativeError,
+          medianTimeMs: null,
+          allRunTimesMs: [],
+          gflops: null,
+          derivedBandwidthGBps: null,
+          speedupVsBaseline: null,
+          fullWgslCode: compilation.fullWgsl,
+          isWinner: false,
+          generation: 2,
+          parentWinnerId: rawVariant.parentWinnerId,
+          sharedMemoryBytes: compilation.sharedMemoryBytes,
+        };
+        setVariantResults((prev) => [
+          ...prev.filter((v) => v.id !== "variant-d"),
+          verifyFailedResult,
+        ]);
+        setStatusMessage("");
+        setIsRunning(false);
+        return;
+      }
+
+      setStatusMessage("BENCHMARKING GEN 2 SILICON TIMINGS (9 RUNS)...");
+      setVariantResults((prev) =>
+        prev.map((v) => (v.id === "variant-d" ? { ...v, status: "BENCHMARKING" } : v))
+      );
+
+      const bench = await runner.benchmarkKernel(
+        compilation.pipeline,
+        workload,
+        dispatchGrid,
+        inputs
+      );
+
+      const speedup =
+        baselineResult?.medianTimeMs && bench.medianTimeMs
+          ? baselineResult.medianTimeMs / bench.medianTimeMs
+          : 1.0;
+
+      const gen2SuccessResult: VariantExecutionResult = {
+        id: "variant-d",
+        name: rawVariant.name,
+        strategy: rawVariant.strategy,
+        rationale: rawVariant.rationale,
+        status: "VERIFIED_WINNER",
+        workgroupSize: rawVariant.workgroupSize,
+        dispatchGrid,
+        compileErrors: [],
+        verified: true,
+        maxRelativeError: verification.maxRelativeError,
+        medianTimeMs: bench.medianTimeMs,
+        allRunTimesMs: bench.allRunTimesMs,
+        gflops: bench.gflops,
+        derivedBandwidthGBps: bench.derivedBandwidthGBps,
+        speedupVsBaseline: speedup,
+        fullWgslCode: compilation.fullWgsl,
+        isWinner: true,
+        generation: 2,
+        parentWinnerId: rawVariant.parentWinnerId,
+        sharedMemoryBytes: compilation.sharedMemoryBytes,
+        iqrMs: bench.iqrMs,
+        stabilityPct: bench.stabilityPct,
+      };
+
+      setVariantResults((prev) => [
+        ...prev.filter((v) => v.id !== "variant-d").map((v) => ({
+          ...v,
+          isWinner: false,
+          status:
+            v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
+              ? v.status
+              : ("VERIFIED_RUNNER_UP" as const),
+        })),
+        gen2SuccessResult,
+      ]);
+      setWinnerResult(gen2SuccessResult);
+      setSelectedInspectId("variant-d");
+      setStatusMessage("");
+    } catch (err: unknown) {
+      console.error("[Vajra] Gen 2 Pipeline error:", err);
+      setApiError({
+        error: err instanceof Error ? err.message : String(err),
+        code: "PARSE_ERROR",
+        retryable: true,
+      });
+      setStatusMessage("");
+    } finally {
+      setIsRunning(false);
+    }
+  }, [
+    probe,
+    previewNoWebGpu,
+    selectedWorkloadId,
+    simulateCompileError,
+    isMockMode,
+    winnerResult,
+    variantResults,
+    baselineResult,
+  ]);
 
   // Handle Preview No-WebGPU toggle
   const handleTogglePreviewNoWebGpu = (preview: boolean) => {
@@ -633,39 +991,40 @@ export default function VajraDashboard() {
   const activeWorkloadSpec = WORKLOADS[selectedWorkloadId];
 
   return (
-    <div className="min-h-screen bg-[#07080A] text-[#F4F6F8]">
-      {/* 1. Industrial Header Strip */}
-      <TopBar
-        probe={probe}
-        isMockMode={isMockMode}
-        onToggleMockMode={(mock) => {
-          setIsMockMode(mock);
-          runPipeline(selectedWorkloadId, mock, simulateCompileError);
-        }}
-        simulateCompileError={simulateCompileError}
-        onToggleSimulateCompileError={(val) => {
-          setSimulateCompileError(val);
-          runPipeline(selectedWorkloadId, isMockMode, val);
-        }}
-        previewNoWebGpu={previewNoWebGpu}
-        onTogglePreviewNoWebGpu={handleTogglePreviewNoWebGpu}
-        liveModelSource={activeModelSource}
-        usedFallbackModel={usedFallbackModel}
-      />
+    <div className="min-h-screen bg-[#0F1419] text-[#F1F5F9]">
+      <div className="mx-auto max-w-[1400px] px-6 py-8 md:px-10 space-y-8">
+        {/* 1. Industrial Header Strip */}
+        <TopBar
+          probe={probe}
+          isMockMode={isMockMode}
+          onToggleMockMode={(mock) => {
+            setIsMockMode(mock);
+            runPipeline(selectedWorkloadId, mock, simulateCompileError);
+          }}
+          simulateCompileError={simulateCompileError}
+          onToggleSimulateCompileError={(val) => {
+            setSimulateCompileError(val);
+            runPipeline(selectedWorkloadId, isMockMode, val);
+          }}
+          previewNoWebGpu={previewNoWebGpu}
+          onTogglePreviewNoWebGpu={handleTogglePreviewNoWebGpu}
+          liveModelSource={activeModelSource}
+          usedFallbackModel={usedFallbackModel}
+        />
 
-      {/* 2. Architectural Workload Selector Bar */}
-      <WorkloadSelector
-        selectedId={selectedWorkloadId}
-        onSelect={handleSelectWorkload}
-        onTune={handleTune}
-        isRunning={isRunning}
-        statusLabel={statusMessage}
-      />
+        {/* 2. Architectural Workload Selector Bar */}
+        <WorkloadSelector
+          selectedId={selectedWorkloadId}
+          onSelect={handleSelectWorkload}
+          onTune={handleTune}
+          onRefineGen2={handleRefineGen2}
+          isRunning={isRunning}
+          statusLabel={statusMessage}
+        />
 
-      {/* 3. API Error Banner */}
-      {apiError && (
-        <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
-          <div className="border border-[#F43F5E] bg-[#160B0E] p-4 font-mono text-xs text-[#F4F6F8]">
+        {/* 3. API Error Banner */}
+        {apiError && (
+          <div className="rounded-lg border-2 border-[#F43F5E] bg-[#160B0E] p-5 font-mono text-xs text-[#F1F5F9]">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-start gap-2.5">
                 <ShieldAlert className="h-5 w-5 shrink-0 text-[#F43F5E]" />
@@ -674,7 +1033,7 @@ export default function VajraDashboard() {
                     GENERATION FAILED: {apiError.error}
                   </div>
                   {apiError.details && (
-                    <div className="mt-1 text-[11px] text-[#8E96A8]">
+                    <div className="mt-1 text-[11px] text-[#94A3B8]">
                       {apiError.details}
                     </div>
                   )}
@@ -683,7 +1042,7 @@ export default function VajraDashboard() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => runPipeline(selectedWorkloadId, false, false)}
-                  className="border border-[#F43F5E] bg-[#F43F5E] px-3.5 py-1.5 font-mono text-xs font-bold uppercase text-[#07080A]"
+                  className="rounded-md bg-[#F43F5E] px-4 py-2 font-mono text-xs font-semibold uppercase text-[#0F1419]"
                 >
                   Retry Live Generation
                 </button>
@@ -692,20 +1051,18 @@ export default function VajraDashboard() {
                     setIsMockMode(true);
                     runPipeline(selectedWorkloadId, true, false);
                   }}
-                  className="border border-[#242936] bg-[#0E1014] px-3.5 py-1.5 font-mono text-xs font-bold uppercase text-[#E5B842] hover:border-[#8A6D1F]"
+                  className="rounded-md border border-[#2A3542] bg-[#11171D] px-4 py-2 font-mono text-xs font-semibold uppercase text-[#F59E0B] hover:bg-[#1E2730]"
                 >
                   Fall Back to Mock Kernels
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* 4. Hero Section: Oscilloscope GFLOPS Chart + Silicon Report Card */}
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 space-y-6">
-        <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Left: 7 Columns GFLOPS Oscilloscope Plot */}
+        {/* 4. Hero Section: Throughput Chart + Silicon Report Card */}
+        <section className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-stretch">
+          {/* Left: 7 Columns GFLOPS Plot */}
           <div className="lg:col-span-7">
             <GflopsChart
               baseline={baselineResult}
@@ -719,6 +1076,7 @@ export default function VajraDashboard() {
             <SiliconReportCard
               winner={winnerResult}
               baseline={baselineResult}
+              variants={variantResults}
               timingMethod={
                 previewNoWebGpu || !probe.supported
                   ? "recorded-reference"
@@ -736,17 +1094,8 @@ export default function VajraDashboard() {
           </div>
         </section>
 
-        {/* 5. 4-Column Pipeline Telemetry Cards Grid */}
-        <section>
-          <div className="mb-3 flex items-center justify-between border-b border-[#242936] pb-2 font-mono text-xs">
-            <h2 className="font-bold uppercase tracking-wider text-[#8E96A8]">
-              02 // PIPELINE EXECUTION & NUMERICAL VERIFICATION (4 VARIANTS)
-            </h2>
-            <span className="text-[#E5B842]">
-              TOLERANCE: MAX_REL_ERROR &lt; 1e-4
-            </span>
-          </div>
-
+        {/* 5. Pipeline Telemetry Cards Grid */}
+        <section className="space-y-4">
           <VariantCardGrid
             baseline={baselineResult}
             variants={variantResults}
@@ -754,6 +1103,9 @@ export default function VajraDashboard() {
             onSelectVariantForInspect={(variant) => setSelectedInspectId(variant.id)}
             workloadId={selectedWorkloadId}
           />
+
+          {/* Failure Graveyard & Guardrail Diagnostics Log */}
+          <FailureGraveyard variants={variantResults} />
         </section>
 
         {/* 6. Terminal Shader Deck (WGSL Inspector) */}
@@ -764,19 +1116,25 @@ export default function VajraDashboard() {
             winner={winnerResult}
             selectedVariantId={selectedInspectId}
             onSelectTab={(id) => setSelectedInspectId(id)}
+            workloadId={selectedWorkloadId}
+            adapterDescription={
+              previewNoWebGpu || !probe.supported
+                ? "Apple M3 Max Reference (Chrome 142)"
+                : probe.adapterDescription
+            }
           />
         </section>
-      </main>
+      </div>
 
       {/* Industrial Footer */}
-      <footer className="border-t border-[#242936] bg-[#0E1014] py-6 font-mono text-xs text-[#8E96A8]">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
+      <footer className="border-t border-[#2A3542] bg-[#161D24] py-6 font-mono text-xs text-[#94A3B8]">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-4 px-6 md:px-10">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-[#E5B842]">VAJRA</span>
-            <span className="text-[#5E6678]">//</span>
+            <span className="font-bold text-[#F59E0B]">VAJRA</span>
+            <span className="text-[#64748B]">//</span>
             <span>ZERO-INSTALL BROWSER-NATIVE WEBGPU AUTO-TUNER</span>
           </div>
-          <div className="text-[#5E6678]">
+          <div className="text-[#64748B]">
             BUILT WITH NVIDIA NEMOTRON VIA NEBIUS TOKEN FACTORY FOR THE GLOBAL AI HACKATHON.
           </div>
         </div>

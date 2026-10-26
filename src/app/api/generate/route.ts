@@ -6,11 +6,14 @@ import {
   WorkloadId,
 } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
-import { getMockVariants } from "@/lib/mockVariants";
+import { getMockVariants, getGen2MockVariant } from "@/lib/mockVariants";
 import {
   buildNemotronSystemPrompt,
   buildNemotronUserPrompt,
   parseNemotronResponse,
+  buildNemotronGen2SystemPrompt,
+  buildNemotronGen2UserPrompt,
+  parseNemotronGen2Response,
 } from "@/lib/nemotronPrompt";
 
 export const maxDuration = 60;
@@ -20,7 +23,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = (await req.json()) as GenerateRequest;
-    const { workloadId, mockMode, simulateCompileError } = body;
+    const {
+      workloadId,
+      mockMode,
+      simulateCompileError,
+      generation = 1,
+      previousWinner,
+      failedVariants,
+    } = body;
 
     if (!workloadId || !WORKLOADS[workloadId as WorkloadId]) {
       const errRes: GenerateErrorResponse = {
@@ -37,6 +47,20 @@ export async function POST(req: NextRequest) {
 
     // 1. MOCK MODE PATH (Zero external API calls)
     if (isMock) {
+      if (generation === 2) {
+        const parentWinnerId = previousWinner?.id || (simulateCompileError ? "variant-b" : "variant-c");
+        const gen2Mock = getGen2MockVariant(workloadId as WorkloadId, parentWinnerId);
+        const response: GenerateResponse = {
+          workloadId: workloadId as WorkloadId,
+          source: "mock",
+          modelId: "mock-nemotron-local",
+          usedFallbackModel: false,
+          latencyMs: Math.max(1, Date.now() - startTime),
+          variants: [gen2Mock],
+        };
+        return NextResponse.json(response, { status: 200 });
+      }
+
       const mockVariants = getMockVariants(
         workloadId as WorkloadId,
         Boolean(simulateCompileError)
@@ -70,8 +94,23 @@ export async function POST(req: NextRequest) {
     const superModel = process.env.NEBIUS_MODEL_SUPER || "nvidia/nemotron-3-super-120b-a12b";
     const ultraModel = process.env.NEBIUS_MODEL_ULTRA || "nvidia/Nemotron-3-Ultra-550b-a55b";
 
-    const systemPrompt = buildNemotronSystemPrompt();
-    const userPrompt = buildNemotronUserPrompt(workload);
+    const isGen2 = generation === 2;
+    const systemPrompt = isGen2 ? buildNemotronGen2SystemPrompt() : buildNemotronSystemPrompt();
+    const userPrompt = isGen2
+      ? buildNemotronGen2UserPrompt(
+          workload,
+          previousWinner
+            ? {
+                id: previousWinner.id,
+                name: previousWinner.name,
+                gflops: previousWinner.gflops,
+                medianTimeMs: previousWinner.medianTimeMs,
+                wgslBody: previousWinner.fullWgslCode,
+              }
+            : undefined,
+          failedVariants
+        )
+      : buildNemotronUserPrompt(workload);
 
     const callNebiusModel = async (model: string, timeoutMs: number) => {
       const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -104,7 +143,9 @@ export async function POST(req: NextRequest) {
         throw new Error(`Empty content returned by ${model}`);
       }
 
-      return parseNemotronResponse(content);
+      return isGen2
+        ? parseNemotronGen2Response(content, previousWinner?.id || "variant-c")
+        : parseNemotronResponse(content);
     };
 
     // Attempt 1: Primary Super Model (25s timeout)

@@ -125,20 +125,75 @@ export function computeDispatchGrid(
   return [Math.max(1, gx), Math.max(1, gy), Math.max(1, gz)];
 }
 
+export function analyzeWgslFootprint(
+  wgslCode: string,
+  workgroupSize: [number, number, number]
+): {
+  sharedMemoryBytes: number;
+  invocationsPerWorkgroup: number;
+} {
+  let sharedMemoryBytes = 0;
+  const regex = /var<workgroup>\s+\w+\s*:\s*array<\s*([a-zA-Z0-9_<>]+)\s*,\s*(\d+)\s*>/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(wgslCode)) !== null) {
+    const type = match[1].trim();
+    const count = parseInt(match[2], 10) || 0;
+    let bytePerElem = 4;
+    if (type.includes("vec4")) {
+      bytePerElem = 16;
+    } else if (type.includes("vec3")) {
+      bytePerElem = 16;
+    } else if (type.includes("vec2")) {
+      bytePerElem = 8;
+    } else {
+      bytePerElem = 4;
+    }
+    sharedMemoryBytes += count * bytePerElem;
+  }
+
+  const invocationsPerWorkgroup =
+    workgroupSize[0] * workgroupSize[1] * workgroupSize[2];
+
+  return { sharedMemoryBytes, invocationsPerWorkgroup };
+}
+
 export interface CompilationResult {
   ok: boolean;
   pipeline?: GPUComputePipeline;
   errors: string[];
   fullWgsl: string;
+  sharedMemoryBytes?: number;
 }
 
 export async function compileShaderModule(
   device: GPUDevice,
   workload: WorkloadSpec,
-  wgslBody: string
+  wgslBody: string,
+  workgroupSize?: [number, number, number]
 ): Promise<CompilationResult> {
   const fullWgsl = `${workload.wgslPreamble}\n\n${wgslBody}`;
   const errors: string[] = [];
+  const wgSize = workgroupSize || parseWorkgroupSize(wgslBody);
+  const { sharedMemoryBytes, invocationsPerWorkgroup } = analyzeWgslFootprint(
+    fullWgsl,
+    wgSize
+  );
+
+  // KernelTuner / CLTune device limit pre-checks
+  if (device.limits) {
+    if (invocationsPerWorkgroup > device.limits.maxComputeInvocationsPerWorkgroup) {
+      errors.push(
+        `Hardware Limit Exceeded: Invocations per workgroup (${invocationsPerWorkgroup}) exceeds device limit (${device.limits.maxComputeInvocationsPerWorkgroup}).`
+      );
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
+    }
+    if (sharedMemoryBytes > device.limits.maxComputeWorkgroupStorageSize) {
+      errors.push(
+        `Hardware Limit Exceeded: Shared memory (${sharedMemoryBytes} bytes) exceeds workgroup storage limit (${device.limits.maxComputeWorkgroupStorageSize} bytes).`
+      );
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
+    }
+  }
 
   try {
     device.pushErrorScope("validation");
@@ -155,7 +210,7 @@ export async function compileShaderModule(
 
     if (errors.length > 0) {
       await device.popErrorScope();
-      return { ok: false, errors, fullWgsl };
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
     }
 
     const pipeline = await device.createComputePipelineAsync({
@@ -169,13 +224,13 @@ export async function compileShaderModule(
     const validationError = await device.popErrorScope();
     if (validationError) {
       errors.push(`Validation Error: ${validationError.message}`);
-      return { ok: false, errors, fullWgsl };
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
     }
 
-    return { ok: true, pipeline, errors: [], fullWgsl };
+    return { ok: true, pipeline, errors: [], fullWgsl, sharedMemoryBytes };
   } catch (err: unknown) {
     errors.push(err instanceof Error ? err.message : String(err));
-    return { ok: false, errors, fullWgsl };
+    return { ok: false, errors, fullWgsl, sharedMemoryBytes };
   }
 }
 
@@ -326,6 +381,8 @@ export class WebGpuBenchmarkRunner {
     gflops: number;
     derivedBandwidthGBps: number;
     timingMethod: TimingMethod;
+    iqrMs: number;
+    stabilityPct: number;
   }> {
     const device = this.device;
 
@@ -473,6 +530,15 @@ export class WebGpuBenchmarkRunner {
     const medianIndex = Math.floor(sorted.length / 2);
     const medianTimeMs = Math.max(0.001, sorted[medianIndex]);
 
+    // KernelTuner: Interquartile Range (IQR) & Stability Telemetry
+    const q1Val = sorted[2] ?? sorted[0];
+    const q3Val = sorted[6] ?? sorted[sorted.length - 1];
+    const iqrMs = Math.max(0.0001, q3Val - q1Val);
+    const stabilityPct = Math.max(
+      0,
+      Math.min(99.9, (1 - iqrMs / Math.max(medianTimeMs, 1e-6)) * 100)
+    );
+
     const medianTimeSeconds = medianTimeMs / 1000;
     const gflops = (workload.totalFlops / medianTimeSeconds) / 1e9;
     const derivedBandwidthGBps = (workload.totalBytesMoved / medianTimeSeconds) / 1e9;
@@ -483,6 +549,8 @@ export class WebGpuBenchmarkRunner {
       gflops,
       derivedBandwidthGBps,
       timingMethod: usedTimingMethod,
+      iqrMs,
+      stabilityPct,
     };
   }
 }

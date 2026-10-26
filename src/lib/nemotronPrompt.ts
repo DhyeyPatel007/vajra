@@ -126,3 +126,112 @@ export function parseNemotronResponse(rawText: string): GeneratedVariant[] {
     };
   });
 }
+
+export function buildNemotronGen2SystemPrompt(): string {
+  return `You are an elite GPU kernel engineer specializing in WebGPU WGSL evolutionary autotuning.
+You are executing a Generation 2 refinement pass. You will receive the Generation 1 winning kernel (with measured hardware telemetry) and any compiler errors from dropped variants.
+Your task is to synthesize exactly ONE evolved variant: "variant-d".
+
+CRITICAL GEN 2 CONSTRAINTS:
+1. PREAMBLE IS FIXED: Do NOT output struct Params or any @group(0) @binding(...) declarations.
+2. FUSED EVOLUTION: Fuse the winning Gen 1 strategy with register coarsening (WPT), unrolled loop iterations, or vectorized arithmetic.
+3. GUARDRAILS: Do NOT repeat any syntax or intrinsic errors that caused compiler failures in dropped variants.
+4. NUMERICAL EQUIVALENCE: Must maintain exact IEEE-754 correctness within 1e-4 relative error.
+5. STRICT JSON ONLY: Return ONLY a raw JSON object with no markdown commentary:
+{
+  "variants": [
+    {
+      "id": "variant-d",
+      "name": "Variant D: Gen 2 Fused Tile + Register Coarsened",
+      "strategy": "gen2_evolved",
+      "rationale": "One-sentence explanation of the evolutionary synthesis and coarsening.",
+      "elementsPerThread": [1, 1, 1],
+      "wgslBody": "..."
+    }
+  ]
+}`;
+}
+
+export function buildNemotronGen2UserPrompt(
+  workload: WorkloadSpec,
+  previousWinner?: { id: string; name: string; gflops?: number | null; medianTimeMs?: number | null; wgslBody: string },
+  failedVariants?: Array<{ name: string; compileErrors: string[] }>
+): string {
+  const winnerInfo = previousWinner
+    ? `GEN 1 WINNER KERNEL:
+Name: ${previousWinner.name} (${previousWinner.id})
+Measured Throughput: ${previousWinner.gflops ? previousWinner.gflops.toFixed(1) : "N/A"} GFLOPS
+Measured Median Latency: ${previousWinner.medianTimeMs ? previousWinner.medianTimeMs.toFixed(3) : "N/A"} ms
+Winning WGSL Body:
+\`\`\`wgsl
+${previousWinner.wgslBody}
+\`\`\``
+    : "No prior winner recorded.";
+
+  const failureInfo =
+    failedVariants && failedVariants.length > 0
+      ? `GEN 1 DROPPED / COMPILER FAILED VARIANTS (AVOID THESE ERRORS):
+${failedVariants
+  .map(
+    (f) =>
+      `- ${f.name}:\n  Compiler Errors: ${f.compileErrors.join("; ") || "Syntax / Linker Fault"}`
+  )
+  .join("\n")}`
+      : "No compiler failures logged in Gen 1.";
+
+  return `Target Workload: ${workload.name} (${workload.dimensionsLabel})
+Description: ${workload.description}
+Problem Dimensions: [${workload.problemDims.join(", ")}]
+
+Fixed Harness WGSL Preamble (DO NOT REPEAT):
+\`\`\`wgsl
+${workload.wgslPreamble}
+\`\`\`
+
+${winnerInfo}
+
+${failureInfo}
+
+Produce ONE evolved Generation 2 kernel ("variant-d") that improves upon the Gen 1 winner while strictly avoiding the compiler faults above. Return valid JSON matching the schema.`;
+}
+
+export function parseNemotronGen2Response(
+  rawText: string,
+  parentWinnerId: string = "variant-c"
+): GeneratedVariant[] {
+  let jsonString = rawText.trim();
+
+  const fenceMatch = jsonString.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) {
+    jsonString = fenceMatch[1].trim();
+  } else {
+    const start = jsonString.indexOf("{");
+    const end = jsonString.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      jsonString = jsonString.substring(start, end + 1);
+    }
+  }
+
+  const parsed = JSON.parse(jsonString);
+  const rawVariants = Array.isArray(parsed) ? parsed : parsed.variants;
+  const raw = Array.isArray(rawVariants) ? rawVariants[0] : parsed;
+
+  const sanitizedBody = sanitizeWgslBody(raw?.wgslBody || "");
+  const parsedWgSize = parseWorkgroupSize(sanitizedBody);
+
+  return [
+    {
+      id: "variant-d",
+      name: raw?.name || "Variant D: Gen 2 Fused Tile + Register Coarsened",
+      strategy: "gen2_evolved",
+      rationale:
+        raw?.rationale ||
+        "Evolutionary synthesis: double-buffered shared tile memory with coarsened registers and unrolled inner loops.",
+      workgroupSize: parsedWgSize,
+      elementsPerThread: raw?.elementsPerThread || [1, 1, 1],
+      wgslBody: sanitizedBody,
+      generation: 2,
+      parentWinnerId,
+    },
+  ];
+}

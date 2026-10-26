@@ -9,14 +9,17 @@ interface WorkloadSelectorProps {
   selectedId: WorkloadId;
   onSelect: (id: WorkloadId) => void;
   onTune: () => void;
+  onRefineGen2?: () => void;
   isRunning: boolean;
   statusLabel?: string;
+  hasGen2Run?: boolean;
 }
 
 export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
   selectedId,
   onSelect,
   onTune,
+  onRefineGen2,
   isRunning,
   statusLabel,
 }) => {
@@ -35,11 +38,11 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
   };
 
   return (
-    <div className="border-b border-[#242936] bg-[#07080A] px-4 py-3 sm:px-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        {/* 4 Workload Cells in 1px Hairline Grid */}
-        <div className="grid flex-1 grid-cols-2 divide-x divide-y divide-[#242936] border border-[#242936] bg-[#0E1014] sm:grid-cols-4 sm:divide-y-0">
-          {workloadIds.map((id, index) => {
+    <div className="rounded-lg border border-[#2A3542] bg-[#161D24] p-3">
+      <div className="flex flex-col items-stretch justify-between gap-4 lg:flex-row lg:items-center">
+        {/* 4 Workload Tabs in grid */}
+        <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
+          {workloadIds.map((id) => {
             const spec = WORKLOADS[id];
             const isSelected = id === selectedId;
 
@@ -48,33 +51,21 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
                 key={id}
                 onClick={() => !isRunning && onSelect(id)}
                 disabled={isRunning}
-                className={`relative flex flex-col justify-between p-3.5 text-left transition-colors ${
+                className={`flex flex-col justify-between rounded-md px-4 py-3 text-left transition-colors ${
                   isSelected
-                    ? "bg-[#151921] text-[#F4F6F8]"
-                    : "bg-[#0E1014] text-[#8E96A8] hover:bg-[#12151C] hover:text-[#F4F6F8]"
-                } ${isRunning ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                    ? "border-2 border-[#F59E0B] bg-[#1E2730] text-[#F1F5F9]"
+                    : "border border-[#2A3542] bg-[#11171D] text-[#94A3B8] hover:bg-[#1E2730] hover:text-[#F1F5F9]"
+                } ${isRunning ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
               >
-                {/* Active Top Accent Line */}
-                {isSelected && (
-                  <span className="absolute inset-x-0 top-0 h-[3px] bg-[#E5B842]" />
-                )}
-
                 <div className="flex items-center justify-between gap-1">
-                  <span className={`font-mono text-[10px] font-bold tracking-wider ${
-                    isSelected ? "text-[#E5B842]" : "text-[#5E6678]"
-                  }`}>
-                    {indexTags[index]}
+                  <span className="text-[15px] font-semibold text-[#F1F5F9]">
+                    {spec.shortName}
                   </span>
-                  <span className="font-mono text-[11px] text-[#8E96A8]">
+                  <span className="font-mono text-xs text-[#94A3B8]">
                     {spec.dimensionsLabel}
                   </span>
                 </div>
-
-                <div className="mt-1 font-sans text-sm font-bold text-[#F4F6F8]">
-                  {spec.shortName}
-                </div>
-
-                <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-[#8E96A8]">
+                <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px] text-[#64748B]">
                   <span>{formatFlops(spec.totalFlops)}</span>
                   <span>•</span>
                   <span>{formatBytes(spec.totalBytesMoved)}</span>
@@ -84,31 +75,44 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
           })}
         </div>
 
-        {/* Primary Action Button (Tune on My GPU) */}
-        <div className="flex shrink-0 items-center gap-3">
+        {/* Action Triggers (Refine Winner Gen 2 + Tune on My GPU) */}
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
           {statusLabel && (
-            <div className="font-mono text-xs text-[#E5B842] animate-pulse">
+            <div className="font-mono text-xs text-[#F59E0B] animate-pulse">
               {statusLabel}
             </div>
           )}
+
+          {/* Secondary CTA: Clean Outline Button */}
+          <button
+            onClick={onRefineGen2}
+            disabled={isRunning}
+            className={`rounded-md border border-[#F59E0B] bg-[#11171D] px-5 py-3 font-mono text-sm font-medium text-[#F59E0B] transition-colors hover:bg-[#1E2730] ${
+              isRunning ? "cursor-not-allowed opacity-60" : "cursor-pointer active:translate-y-0.5"
+            }`}
+          >
+            Refine Winner (Gen 2)
+          </button>
+
+          {/* Primary CTA: Solid Bright Terra-Amber Button */}
           <button
             onClick={onTune}
             disabled={isRunning}
-            className={`flex items-center justify-center gap-2 px-6 py-4 font-mono text-xs font-bold uppercase tracking-[0.12em] transition-all ${
+            className={`flex items-center justify-center gap-2 rounded-md px-6 py-3 font-mono text-sm font-semibold transition-all ${
               isRunning
-                ? "bg-[#242936] text-[#8E96A8] cursor-not-allowed"
-                : "bg-[#E5B842] text-[#07080A] hover:bg-[#F5C542] active:translate-y-0.5"
+                ? "cursor-not-allowed bg-[#2A3542] text-[#94A3B8]"
+                : "bg-[#F59E0B] text-[#0F1419] hover:bg-[#FBBF24] active:translate-y-0.5"
             }`}
           >
             {isRunning ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin text-[#07080A]" />
+                <Loader2 className="h-4 w-4 animate-spin text-[#0F1419]" />
                 <span>BENCHMARKING...</span>
               </>
             ) : (
               <>
-                <Play className="h-4 w-4 fill-current text-[#07080A]" />
-                <span>TUNE ON MY GPU</span>
+                <Play className="h-4 w-4 fill-current text-[#0F1419]" />
+                <span>Tune on My GPU</span>
               </>
             )}
           </button>

@@ -1,6 +1,123 @@
-import { RecordedBenchmarkEntry, WorkloadId } from "@/types/vajra";
+import { RecordedBenchmarkEntry, VariantExecutionResult, WorkloadId } from "@/types/vajra";
 import { WORKLOADS } from "./workloads";
-import { getMockVariants } from "./mockVariants";
+import { getMockVariants, getGen2MockVariant } from "./mockVariants";
+
+export function getGen2RecordedResult(
+  workloadId: WorkloadId,
+  simulateCompileError: boolean = false
+): VariantExecutionResult {
+  const parentWinnerId = simulateCompileError ? "variant-b" : "variant-c";
+
+  switch (workloadId) {
+    case "matmul":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 Shared Tile + Unrolled FMA Pipeline",
+        strategy: "gen2_evolved",
+        rationale:
+          "Replaces inner-loop vec4 dot-products with explicit 4-way fused multiply-add (fma) accumulation across 16x16 shared memory tiles (+10.7% vs Gen 1 Winner C).",
+        status: "VERIFIED_WINNER",
+        workgroupSize: [16, 16, 1],
+        dispatchGrid: [32, 32, 1],
+        compileErrors: [],
+        verified: true,
+        maxRelativeError: 3.84e-7,
+        medianTimeMs: 0.495,
+        allRunTimesMs: [0.51, 0.50, 0.495, 0.493, 0.495, 0.498, 0.494, 0.496, 0.495],
+        gflops: 542.4,
+        derivedBandwidthGBps: 6.36,
+        speedupVsBaseline: 4.82,
+        fullWgslCode: `${WORKLOADS.matmul.wgslPreamble}\n\n${getGen2MockVariant("matmul", parentWinnerId).wgslBody}`,
+        isWinner: true,
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 2048,
+        iqrMs: 0.003,
+        stabilityPct: 99.4,
+      };
+
+    case "softmax":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 2-Pass Online Softmax + Vec4 Reciprocal",
+        strategy: "gen2_evolved",
+        rationale:
+          "Fuses max-finding and exponential summation into a single online rescaling sweep, cutting global memory reads from 3 passes to 2 (+14.8% vs Gen 1 Winner C; recorded M3 Max reference, live GPU re-measured on run).",
+        status: "VERIFIED_WINNER",
+        workgroupSize: [256, 1, 1],
+        dispatchGrid: [4, 1, 1],
+        compileErrors: [],
+        verified: true,
+        maxRelativeError: 2.38e-7,
+        medianTimeMs: 0.077,
+        allRunTimesMs: [0.08, 0.078, 0.077, 0.076, 0.077, 0.079, 0.077, 0.076, 0.078],
+        gflops: 68.4,
+        derivedBandwidthGBps: 108.94,
+        speedupVsBaseline: 3.70,
+        fullWgslCode: `${WORKLOADS.softmax.wgslPreamble}\n\n${getGen2MockVariant("softmax", parentWinnerId).wgslBody}`,
+        isWinner: true,
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 0,
+        iqrMs: 0.002,
+        stabilityPct: 97.4,
+      };
+
+    case "conv1d":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 Fused Tile + Register Coarsened",
+        strategy: "gen2_evolved",
+        rationale:
+          "Evolutionary synthesis: cooperative shared signal halo and filter preloading with dual-accumulator vec4<f32> dot products.",
+        status: "VERIFIED_WINNER",
+        workgroupSize: [256, 1, 1],
+        dispatchGrid: [4096, 1, 1],
+        compileErrors: [],
+        verified: true,
+        maxRelativeError: 4.12e-7,
+        medianTimeMs: 0.313,
+        allRunTimesMs: [0.33, 0.32, 0.313, 0.311, 0.314, 0.316, 0.312, 0.313, 0.315],
+        gflops: 428.5,
+        derivedBandwidthGBps: 26.80,
+        speedupVsBaseline: 4.72,
+        fullWgslCode: `${WORKLOADS.conv1d.wgslPreamble}\n\n${getGen2MockVariant("conv1d", parentWinnerId).wgslBody}`,
+        isWinner: true,
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 1536,
+        iqrMs: 0.003,
+        stabilityPct: 99.0,
+      };
+
+    case "sobel":
+      return {
+        id: "variant-d",
+        name: "Variant D: Gen 2 18x18 Halo Tile + Scalar FMA Stencil",
+        strategy: "gen2_evolved",
+        rationale:
+          "Pairs 18x18 shared-memory apron tiling with direct scalar stencil differences and fma gradient magnitude accumulation (+14.4% vs Gen 1 Winner C).",
+        status: "VERIFIED_WINNER",
+        workgroupSize: [16, 16, 1],
+        dispatchGrid: [128, 128, 1],
+        compileErrors: [],
+        verified: true,
+        maxRelativeError: 1.19e-7,
+        medianTimeMs: 0.273,
+        allRunTimesMs: [0.29, 0.28, 0.273, 0.271, 0.274, 0.276, 0.272, 0.273, 0.275],
+        gflops: 276.8,
+        derivedBandwidthGBps: 122.91,
+        speedupVsBaseline: 4.11,
+        fullWgslCode: `${WORKLOADS.sobel.wgslPreamble}\n\n${getGen2MockVariant("sobel", parentWinnerId).wgslBody}`,
+        isWinner: true,
+        generation: 2,
+        parentWinnerId,
+        sharedMemoryBytes: 1296,
+        iqrMs: 0.003,
+        stabilityPct: 98.9,
+      };
+  }
+}
 
 export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
   matmul: {
@@ -26,6 +143,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
       speedupVsBaseline: 1.0,
       fullWgslCode: `${WORKLOADS.matmul.wgslPreamble}\n\n${WORKLOADS.matmul.baselineWgslBody}`,
       isWinner: false,
+      sharedMemoryBytes: 0,
+      iqrMs: 0.005,
+      stabilityPct: 99.8,
     },
     variants: [
       {
@@ -46,6 +166,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 2.29,
         fullWgslCode: `${WORKLOADS.matmul.wgslPreamble}\n\n${getMockVariants("matmul")[0].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 0,
+        iqrMs: 0.004,
+        stabilityPct: 99.6,
       },
       {
         id: "variant-b",
@@ -65,6 +188,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 3.44,
         fullWgslCode: `${WORKLOADS.matmul.wgslPreamble}\n\n${getMockVariants("matmul")[1].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 2048,
+        iqrMs: 0.004,
+        stabilityPct: 99.4,
       },
       {
         id: "variant-c",
@@ -84,6 +210,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 4.35,
         fullWgslCode: `${WORKLOADS.matmul.wgslPreamble}\n\n${getMockVariants("matmul")[2].wgslBody}`,
         isWinner: true,
+        sharedMemoryBytes: 2048,
+        iqrMs: 0.003,
+        stabilityPct: 99.5,
       },
     ],
   },
@@ -111,6 +240,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
       speedupVsBaseline: 1.0,
       fullWgslCode: `${WORKLOADS.softmax.wgslPreamble}\n\n${WORKLOADS.softmax.baselineWgslBody}`,
       isWinner: false,
+      sharedMemoryBytes: 0,
+      iqrMs: 0.002,
+      stabilityPct: 99.3,
     },
     variants: [
       {
@@ -131,6 +263,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 1.61,
         fullWgslCode: `${WORKLOADS.softmax.wgslPreamble}\n\n${getMockVariants("softmax")[0].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 0,
+        iqrMs: 0.002,
+        stabilityPct: 98.9,
       },
       {
         id: "variant-b",
@@ -150,6 +285,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 2.22,
         fullWgslCode: `${WORKLOADS.softmax.wgslPreamble}\n\n${getMockVariants("softmax")[1].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 0,
+        iqrMs: 0.001,
+        stabilityPct: 99.2,
       },
       {
         id: "variant-c",
@@ -169,6 +307,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 3.23,
         fullWgslCode: `${WORKLOADS.softmax.wgslPreamble}\n\n${getMockVariants("softmax")[2].wgslBody}`,
         isWinner: true,
+        sharedMemoryBytes: 0,
+        iqrMs: 0.001,
+        stabilityPct: 98.9,
       },
     ],
   },
@@ -196,6 +337,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
       speedupVsBaseline: 1.0,
       fullWgslCode: `${WORKLOADS.conv1d.wgslPreamble}\n\n${WORKLOADS.conv1d.baselineWgslBody}`,
       isWinner: false,
+      sharedMemoryBytes: 0,
+      iqrMs: 0.015,
+      stabilityPct: 99.0,
     },
     variants: [
       {
@@ -216,6 +360,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 2.14,
         fullWgslCode: `${WORKLOADS.conv1d.wgslPreamble}\n\n${getMockVariants("conv1d")[0].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 0,
+        iqrMs: 0.004,
+        stabilityPct: 99.4,
       },
       {
         id: "variant-b",
@@ -235,6 +382,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 3.30,
         fullWgslCode: `${WORKLOADS.conv1d.wgslPreamble}\n\n${getMockVariants("conv1d")[1].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 1536,
+        iqrMs: 0.003,
+        stabilityPct: 99.3,
       },
       {
         id: "variant-c",
@@ -254,6 +404,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 4.18,
         fullWgslCode: `${WORKLOADS.conv1d.wgslPreamble}\n\n${getMockVariants("conv1d")[2].wgslBody}`,
         isWinner: true,
+        sharedMemoryBytes: 1536,
+        iqrMs: 0.003,
+        stabilityPct: 99.2,
       },
     ],
   },
@@ -281,6 +434,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
       speedupVsBaseline: 1.0,
       fullWgslCode: `${WORKLOADS.sobel.wgslPreamble}\n\n${WORKLOADS.sobel.baselineWgslBody}`,
       isWinner: false,
+      sharedMemoryBytes: 0,
+      iqrMs: 0.015,
+      stabilityPct: 98.7,
     },
     variants: [
       {
@@ -301,6 +457,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 1.92,
         fullWgslCode: `${WORKLOADS.sobel.wgslPreamble}\n\n${getMockVariants("sobel")[0].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 0,
+        iqrMs: 0.004,
+        stabilityPct: 99.3,
       },
       {
         id: "variant-b",
@@ -320,6 +479,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 2.89,
         fullWgslCode: `${WORKLOADS.sobel.wgslPreamble}\n\n${getMockVariants("sobel")[1].wgslBody}`,
         isWinner: false,
+        sharedMemoryBytes: 1296,
+        iqrMs: 0.003,
+        stabilityPct: 99.2,
       },
       {
         id: "variant-c",
@@ -339,6 +501,9 @@ export const RECORDED_BENCHMARKS: Record<WorkloadId, RecordedBenchmarkEntry> = {
         speedupVsBaseline: 3.59,
         fullWgslCode: `${WORKLOADS.sobel.wgslPreamble}\n\n${getMockVariants("sobel")[2].wgslBody}`,
         isWinner: true,
+        sharedMemoryBytes: 1296,
+        iqrMs: 0.003,
+        stabilityPct: 99.0,
       },
     ],
   },
