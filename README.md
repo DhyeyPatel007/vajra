@@ -1,31 +1,31 @@
 # Vajra — WebGPU Kernel Auto-Tuner
 
-> **"AI writes GPU shaders, but only your hardware knows the truth. Vajra benchmarks every Nemotron kernel live on your GPU and keeps the fastest."**
+> "AI writes GPU shaders, but only your hardware knows the truth. Vajra benchmarks every Nemotron kernel live on your GPU and keeps the fastest."
 
 [![Next.js](https://img.shields.io/badge/Next.js-15.1-black?logo=next.js)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![WebGPU](https://img.shields.io/badge/WebGPU-API-green?logo=w3c)](https://www.w3.org/TR/webgpu/)
-[![WGSL](https://img.shields.io/badge/Shader-WGSL-orange)](https://www.w3.org/TR/WGSL/)
-[![NVIDIA Nemotron](https://img.shields.io/badge/LLM-NVIDIA%20Nemotron-76B900?logo=nvidia)](https://build.nvidia.com/)
-[![Nebius Token Factory](https://img.shields.io/badge/Inference-Nebius%20Token%20Factory-6366F1)](https://tokenfactory.nebius.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Shader](https://img.shields.io/badge/Shader-WGSL-orange)](https://www.w3.org/TR/WGSL/)
+[![LLM](https://img.shields.io/badge/LLM-NVIDIA%20Nemotron-76B900?logo=nvidia)](https://build.nvidia.com/)
+[![Inference](https://img.shields.io/badge/Inference-Nebius%20Token%20Factory-6366F1)](https://tokenfactory.nebius.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-TBD-lightgrey)](#)
 
 ---
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                 │
-│   COMPUTE THROUGHPUT COMPARISON (GFLOPS)       │   FASTEST VERIFIED KERNEL                      │
-│   9-run hardware median • higher is faster     │   Variant C: 16x16 Tiled + Vec4 Dot-Product    │
-│                                                │                                                │
-│   Baseline   [ 112.6 GFLOPS (1.00x) ]          │   SPEEDUP VS. BASELINE    MEDIAN THROUGHPUT    │
-│   Variant A  [ 257.6 GFLOPS (2.29x) ]          │   4.35x                   489.8 GFLOPS         │
-│   Variant B  [ 386.8 GFLOPS (3.44x) ]          │                                                │
-│   Variant C  [ 489.8 GFLOPS (4.35x) ] ★ WINNER │   Latency: 0.548 ms  •  Bandwidth: 5.74 GB/s   │
-│   Variant D  [ 542.4 GFLOPS (4.82x) ] ★ GEN 2  │   Accuracy: Verified (< 1e-4)                  │
-│                                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
++-------------------------------------------------------------------------------------------------+
+|                                                                                                 |
+|   COMPUTE THROUGHPUT COMPARISON (GFLOPS)       |   FASTEST VERIFIED KERNEL                      |
+|   9-run hardware median • higher is faster     |   Variant C: 16x16 Tiled + Vec4 Dot-Product    |
+|                                                |                                                |
+|   Baseline   [ 112.6 GFLOPS (1.00x) ]          |   SPEEDUP VS. BASELINE    MEDIAN THROUGHPUT    |
+|   Variant A  [ 257.6 GFLOPS (2.29x) ]          |   4.35x                   489.8 GFLOPS         |
+|   Variant B  [ 386.8 GFLOPS (3.44x) ]          |                                                |
+|   Variant C  [ 489.8 GFLOPS (4.35x) ] ★ WINNER |   Latency: 0.548 ms  •  Bandwidth: 5.74 GB/s   |
+|   Variant D  [ 542.4 GFLOPS (4.82x) ] ★ GEN 2  |   Accuracy: Verified (< 1e-4)                  |
+|                                                                                                 |
++-------------------------------------------------------------------------------------------------+
 ```
 
 ---
