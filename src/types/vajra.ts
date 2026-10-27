@@ -117,6 +117,7 @@ export interface VariantExecutionResult {
   iqrMs?: number;
   stabilityPct?: number;
   parentWinnerId?: string;
+  isSimulatedFailure?: boolean;
 }
 
 export interface GenerateRequest {
@@ -130,7 +131,12 @@ export interface GenerateRequest {
 
 export interface GenerateResponse {
   workloadId: WorkloadId;
-  source: "mock" | "nebius-super" | "nebius-ultra-fallback";
+  source:
+    | "mock"
+    | "nebius-super"
+    | "nebius-ultra-fallback"
+    | "nvidia-super"
+    | "nvidia-nano-fallback";
   modelId: string;
   usedFallbackModel: boolean;
   latencyMs: number;

@@ -18,6 +18,25 @@ import {
 
 export const maxDuration = 60;
 
+/**
+ * Strips sensitive authorization token patterns to ensure credentials are never leaked.
+ */
+function sanitizeErrorMessage(msg: string): string {
+  if (!msg) return "";
+  return msg
+    .replace(/Bearer\s+[A-Za-z0-9\-_\.]+/gi, "Bearer [REDACTED]")
+    .replace(/(?:api[_-]?key|token)=["']?[A-Za-z0-9\-_\.]+["']?/gi, "$1=[REDACTED]");
+}
+
+// Known placeholder string values indicating an unconfigured key
+const PLACEHOLDER_KEYS = new Set([
+  "your_nebius_api_key_here",
+  "your_nebius_token_factory_api_key_here",
+  "your_actual_nebius_key",
+  "your_nvidia_api_key_here",
+  "your_actual_nvidia_key",
+]);
+
 export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
@@ -45,10 +64,11 @@ export async function POST(req: NextRequest) {
     const serverMockDefault = process.env.VAJRA_MOCK_MODE !== "false";
     const isMock = mockMode === true || (mockMode === undefined && serverMockDefault);
 
-    // 1. MOCK MODE PATH (Zero external API calls)
+    // 1. MOCK MODE PATH (Zero external API calls, NO key required)
     if (isMock) {
       if (generation === 2) {
-        const parentWinnerId = previousWinner?.id || (simulateCompileError ? "variant-b" : "variant-c");
+        const parentWinnerId =
+          previousWinner?.id || (simulateCompileError ? "variant-b" : "variant-c");
         const gen2Mock = getGen2MockVariant(workloadId as WorkloadId, parentWinnerId);
         const response: GenerateResponse = {
           workloadId: workloadId as WorkloadId,
@@ -78,21 +98,46 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(response, { status: 200 });
     }
 
-    // 2. LIVE NEBIUS TOKEN FACTORY PATH
-    const apiKey = process.env.NEBIUS_API_KEY;
-    if (!apiKey || apiKey === "your_nebius_token_factory_api_key_here") {
+    // 2. LIVE LLM PROVIDER SELECTION
+    // NOTE:
+    // - Token Factory (api.tokenfactory.nebius.com) is the final submission path (default: VAJRA_PROVIDER=nebius).
+    // - NVIDIA path (integrate.api.nvidia.com) is for temporary checking only (VAJRA_PROVIDER=nvidia).
+    const provider = (process.env.VAJRA_PROVIDER || "nebius").toLowerCase().trim();
+    const isNvidia = provider === "nvidia";
+
+    const apiKeyEnvVar = isNvidia ? "NVIDIA_API_KEY" : "NEBIUS_API_KEY";
+    const rawApiKey = isNvidia ? process.env.NVIDIA_API_KEY : process.env.NEBIUS_API_KEY;
+    const apiKey = rawApiKey ? rawApiKey.trim() : "";
+
+    if (!apiKey || PLACEHOLDER_KEYS.has(apiKey)) {
       const errRes: GenerateErrorResponse = {
-        error: "NEBIUS_API_KEY is not configured in server environment (.env.local or Vercel environment variables).",
+        error: `${apiKeyEnvVar} is not configured in server environment (.env.local or Vercel environment variables).`,
         code: "MISSING_API_KEY",
         retryable: true,
-        details: "Please paste your Nebius Token Factory API key into .env.local as NEBIUS_API_KEY.",
+        details: `Please set ${apiKeyEnvVar} in .env.local to enable live kernel generation via ${
+          isNvidia ? "NVIDIA API (check path)" : "Nebius Token Factory (submission path)"
+        }.`,
       };
       return NextResponse.json(errRes, { status: 502 });
     }
 
-    const baseUrl = (process.env.NEBIUS_BASE_URL || "https://api.tokenfactory.nebius.com/v1").replace(/\/+$/, "");
-    const superModel = process.env.NEBIUS_MODEL_SUPER || "nvidia/nemotron-3-super-120b-a12b";
-    const ultraModel = process.env.NEBIUS_MODEL_ULTRA || "nvidia/Nemotron-3-Ultra-550b-a55b";
+    const baseUrl = isNvidia
+      ? (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1").replace(/\/+$/, "")
+      : (process.env.NEBIUS_BASE_URL || "https://api.tokenfactory.nebius.com/v1").replace(/\/+$/, "");
+
+    const primaryModel = isNvidia
+      ? process.env.NVIDIA_MODEL_SUPER || "nvidia/nemotron-3-super-120b-a12b"
+      : process.env.NEBIUS_MODEL_SUPER || "nvidia/nemotron-3-super-120b-a12b";
+
+    const fallbackModel = isNvidia
+      ? process.env.NVIDIA_MODEL_NANO || "nvidia/llama-3.1-nemotron-70b-instruct"
+      : process.env.NEBIUS_MODEL_ULTRA || "nvidia/Nemotron-3-Ultra-550b-a55b";
+
+    const primaryTimeoutMs = 25000;
+    const fallbackTimeoutMs = 30000;
+
+    const primarySource = isNvidia ? "nvidia-super" : "nebius-super";
+    const fallbackSource = isNvidia ? "nvidia-nano-fallback" : "nebius-ultra-fallback";
 
     const isGen2 = generation === 2;
     const systemPrompt = isGen2 ? buildNemotronGen2SystemPrompt() : buildNemotronSystemPrompt();
@@ -112,7 +157,7 @@ export async function POST(req: NextRequest) {
         )
       : buildNemotronUserPrompt(workload);
 
-    const callNebiusModel = async (model: string, timeoutMs: number) => {
+    const callProviderModel = async (model: string, timeoutMs: number) => {
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -133,8 +178,9 @@ export async function POST(req: NextRequest) {
       });
 
       if (!res.ok) {
-        const errorText = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status} from ${model}: ${errorText.slice(0, 300)}`);
+        const rawErrorText = await res.text().catch(() => "");
+        const safeErrorText = sanitizeErrorMessage(rawErrorText.slice(0, 300));
+        throw new Error(`HTTP ${res.status} from ${model}: ${safeErrorText}`);
       }
 
       const data = await res.json();
@@ -148,54 +194,67 @@ export async function POST(req: NextRequest) {
         : parseNemotronResponse(content);
     };
 
-    // Attempt 1: Primary Super Model (25s timeout)
+    // Attempt 1: Primary Model (Super, 25s timeout)
     try {
-      const variants = await callNebiusModel(superModel, 25000);
+      const variants = await callProviderModel(primaryModel, primaryTimeoutMs);
       const response: GenerateResponse = {
         workloadId: workloadId as WorkloadId,
-        source: "nebius-super",
-        modelId: superModel,
+        source: primarySource,
+        modelId: primaryModel,
         usedFallbackModel: false,
         latencyMs: Date.now() - startTime,
         variants,
       };
       return NextResponse.json(response, { status: 200 });
-    } catch (superErr: unknown) {
-      console.warn(`[Vajra] Super model (${superModel}) failed, attempting Ultra fallback:`, superErr);
+    } catch (primaryErr: unknown) {
+      const safePrimaryErr = sanitizeErrorMessage(
+        primaryErr instanceof Error ? primaryErr.message : String(primaryErr)
+      );
+      console.warn(
+        `[Vajra] Primary model (${primaryModel}) failed on ${provider}, attempting fallback:`,
+        safePrimaryErr
+      );
 
-      // Attempt 2: Fallback Ultra Model (30s timeout)
+      // Attempt 2: Fallback Model (Ultra / Nano, 30s timeout)
       try {
-        const variants = await callNebiusModel(ultraModel, 30000);
+        const variants = await callProviderModel(fallbackModel, fallbackTimeoutMs);
         const response: GenerateResponse = {
           workloadId: workloadId as WorkloadId,
-          source: "nebius-ultra-fallback",
-          modelId: ultraModel,
+          source: fallbackSource,
+          modelId: fallbackModel,
           usedFallbackModel: true,
           latencyMs: Date.now() - startTime,
           variants,
         };
         return NextResponse.json(response, { status: 200 });
-      } catch (ultraErr: unknown) {
-        console.error(`[Vajra] Both Super and Ultra models failed:`, {
-          superErr: superErr instanceof Error ? superErr.message : superErr,
-          ultraErr: ultraErr instanceof Error ? ultraErr.message : ultraErr,
-        });
+      } catch (fallbackErr: unknown) {
+        const safeFallbackErr = sanitizeErrorMessage(
+          fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+        );
+        console.error(
+          `[Vajra] Both primary and fallback models failed on ${provider}:`,
+          {
+            primary: safePrimaryErr,
+            fallback: safeFallbackErr,
+          }
+        );
 
         const errRes: GenerateErrorResponse = {
-          error: "Upstream generation failed: both Nemotron Super and Nemotron Ultra returned errors or timed out.",
+          error: `Upstream generation failed: both ${primaryModel} and ${fallbackModel} returned errors or timed out.`,
           code: "UPSTREAM_SUPER_AND_ULTRA_FAILED",
           retryable: true,
-          details: `Super: ${superErr instanceof Error ? superErr.message : String(superErr)} | Ultra: ${ultraErr instanceof Error ? ultraErr.message : String(ultraErr)}`,
+          details: `Primary (${primaryModel}): ${safePrimaryErr} | Fallback (${fallbackModel}): ${safeFallbackErr}`,
         };
         return NextResponse.json(errRes, { status: 502 });
       }
     }
   } catch (err: unknown) {
+    const safeErr = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     const errRes: GenerateErrorResponse = {
       error: "Unexpected server error while processing kernel generation request.",
       code: "PARSE_ERROR",
       retryable: true,
-      details: err instanceof Error ? err.message : String(err),
+      details: safeErr,
     };
     return NextResponse.json(errRes, { status: 500 });
   }

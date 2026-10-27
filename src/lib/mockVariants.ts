@@ -43,7 +43,7 @@ export function getGen2MockVariant(
         name: "Variant D: Gen 2 Shared Tile + Unrolled FMA Pipeline",
         strategy: "gen2_evolved",
         rationale:
-          "Replaces inner-loop vec4 dot-products with explicit 4-way fused multiply-add (fma) accumulation across 16x16 shared memory tiles (+10.7% vs Gen 1 Winner C).",
+          "Replaces inner-loop vec4 dot-products with explicit 4-way fused multiply-add (fma) accumulation across 16x16 shared memory tiles.",
         workgroupSize: [16, 16, 1],
         elementsPerThread: [1, 1, 1],
         generation: 2,
@@ -82,7 +82,7 @@ fn main(
 
     workgroupBarrier();
 
-    // 4 iterations of 4-wide dot product + FMA unrolling
+    // 4 iterations of 4-wide unrolled dot accumulation in strict sequential float order
     for (var k: u32 = 0u; k < 16u; k = k + 4u) {
       let va = vec4<f32>(
         tileA[ly * 16u + k],
@@ -96,7 +96,10 @@ fn main(
         tileB[(k + 2u) * 16u + lx],
         tileB[(k + 3u) * 16u + lx]
       );
-      sum = fma(va.x, vb.x, fma(va.y, vb.y, fma(va.z, vb.z, fma(va.w, vb.w, sum))));
+      sum = sum + va.x * vb.x;
+      sum = sum + va.y * vb.y;
+      sum = sum + va.z * vb.z;
+      sum = sum + va.w * vb.w;
     }
 
     workgroupBarrier();
@@ -114,7 +117,7 @@ fn main(
         name: "Variant D: Gen 2 2-Pass Online Softmax + Vec4 Reciprocal",
         strategy: "gen2_evolved",
         rationale:
-          "Fuses max-finding and exponential summation into a single online rescaling sweep, cutting global memory reads from 3 passes to 2 (+14.8% vs Gen 1 Winner C; recorded M3 Max reference, live GPU re-measured on run).",
+          "Fuses max-finding and exponential summation into a single online rescaling sweep, cutting global memory reads from 3 passes to 2.",
         workgroupSize: [256, 1, 1],
         elementsPerThread: [1, 1, 1],
         generation: 2,
@@ -248,7 +251,10 @@ fn main(
       sharedFilter[k + 2u],
       sharedFilter[k + 3u]
     );
-    acc0 = fma(sVec0.x, fVec0.x, fma(sVec0.y, fVec0.y, fma(sVec0.z, fVec0.z, fma(sVec0.w, fVec0.w, acc0))));
+    acc0 = acc0 + sVec0.x * fVec0.x;
+    acc0 = acc0 + sVec0.y * fVec0.y;
+    acc0 = acc0 + sVec0.z * fVec0.z;
+    acc0 = acc0 + sVec0.w * fVec0.w;
 
     let sVec1 = vec4<f32>(
       sharedSignal[tid + k + 4u],
@@ -262,10 +268,13 @@ fn main(
       sharedFilter[k + 6u],
       sharedFilter[k + 7u]
     );
-    acc1 = fma(sVec1.x, fVec1.x, fma(sVec1.y, fVec1.y, fma(sVec1.z, fVec1.z, fma(sVec1.w, fVec1.w, acc1))));
+    acc0 = acc0 + sVec1.x * fVec1.x;
+    acc0 = acc0 + sVec1.y * fVec1.y;
+    acc0 = acc0 + sVec1.z * fVec1.z;
+    acc0 = acc0 + sVec1.w * fVec1.w;
   }
 
-  signalOut[globalSignalIdx] = acc0 + acc1;
+  signalOut[globalSignalIdx] = acc0;
 }`,
       };
 
@@ -275,7 +284,7 @@ fn main(
         name: "Variant D: Gen 2 18x18 Halo Tile + Scalar FMA Stencil",
         strategy: "gen2_evolved",
         rationale:
-          "Pairs 18x18 shared-memory apron tiling with direct scalar stencil differences and fma gradient magnitude accumulation (+14.4% vs Gen 1 Winner C).",
+          "Pairs 18x18 shared-memory apron tiling with direct scalar stencil differences and fma gradient magnitude accumulation.",
         workgroupSize: [16, 16, 1],
         elementsPerThread: [1, 1, 1],
         generation: 2,
@@ -336,10 +345,10 @@ fn main(
     sharedHaloTile[(ty + 1u) * 18u + (tx + 1u)]
   );
 
-  let sx = (r0.z - r0.x) + 2.0 * (r1.z - r1.x) + (r2.z - r2.x);
-  let sy = (r2.x - r0.x) + 2.0 * (r2.y - r0.y) + (r2.z - r0.z);
+  let sx = -1.0 * r0.x + 1.0 * r0.z - 2.0 * r1.x + 2.0 * r1.z - 1.0 * r2.x + 1.0 * r2.z;
+  let sy = -1.0 * r0.x - 2.0 * r0.y - 1.0 * r0.z + 1.0 * r2.x + 2.0 * r2.y + 1.0 * r2.z;
 
-  imgOut[gy * w + gx] = sqrt(fma(sx, sx, sy * sy));
+  imgOut[gy * w + gx] = sqrt(sx * sx + sy * sy);
 }`,
       };
   }
@@ -472,7 +481,7 @@ fn main(
 
     workgroupBarrier();
 
-    // 4 iterations of 4-wide dot product
+    // 4 iterations of 4-wide unrolled dot accumulation in strict sequential float order
     for (var k: u32 = 0u; k < 16u; k = k + 4u) {
       let va = vec4<f32>(
         sTileA[ly * 16u + k],
@@ -486,7 +495,10 @@ fn main(
         sTileB[(k + 2u) * 16u + lx],
         sTileB[(k + 3u) * 16u + lx]
       );
-      sum = sum + dot(va, vb);
+      sum = sum + va.x * vb.x;
+      sum = sum + va.y * vb.y;
+      sum = sum + va.z * vb.z;
+      sum = sum + va.w * vb.w;
     }
 
     workgroupBarrier();
@@ -804,7 +816,10 @@ fn main(
       sharedFilt[k + 2u],
       sharedFilt[k + 3u]
     );
-    acc = acc + dot(sVec, fVec);
+    acc = acc + sVec.x * fVec.x;
+    acc = acc + sVec.y * fVec.y;
+    acc = acc + sVec.z * fVec.z;
+    acc = acc + sVec.w * fVec.w;
   }
 
   signalOut[globalSignalIdx] = acc;
@@ -850,8 +865,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let p01 = imgIn[topRow + x];
   let p21 = imgIn[botRow + x];
 
-  let gx = (p02 - p00) + 2.0 * (p12 - p10) + (p22 - p20);
-  let gy = (p20 - p00) + 2.0 * (p21 - p01) + (p22 - p02);
+  let gx = -1.0 * p00 + 1.0 * p02 - 2.0 * p10 + 2.0 * p12 - 1.0 * p20 + 1.0 * p22;
+  let gy = -1.0 * p00 - 2.0 * p01 - 1.0 * p02 + 1.0 * p20 + 2.0 * p21 + 1.0 * p22;
 
   imgOut[midRow + x] = sqrt(gx * gx + gy * gy);
 }`,
@@ -913,8 +928,8 @@ fn main(
   let p21 = tile[(ty + 1u) * 18u + tx];
   let p22 = tile[(ty + 1u) * 18u + (tx + 1u)];
 
-  let sx = (p02 - p00) + 2.0 * (p12 - p10) + (p22 - p20);
-  let sy = (p20 - p00) + 2.0 * (p21 - p01) + (p22 - p02);
+  let sx = -1.0 * p00 + 1.0 * p02 - 2.0 * p10 + 2.0 * p12 - 1.0 * p20 + 1.0 * p22;
+  let sy = -1.0 * p00 - 2.0 * p01 - 1.0 * p02 + 1.0 * p20 + 2.0 * p21 + 1.0 * p22;
 
   imgOut[gy * w + gx] = sqrt(sx * sx + sy * sy);
 }`,
@@ -982,11 +997,8 @@ fn main(
     tileHalo[(ty + 1u) * 18u + (tx + 1u)]
   );
 
-  let kx = vec3<f32>(-1.0, 0.0, 1.0);
-  let sx = dot(r0, kx) + 2.0 * dot(r1, kx) + dot(r2, kx);
-
-  let sy = dot(vec3<f32>(r0.x, r0.y, r0.z), vec3<f32>(-1.0, -2.0, -1.0))
-         + dot(vec3<f32>(r2.x, r2.y, r2.z), vec3<f32>(1.0, 2.0, 1.0));
+  let sx = -1.0 * r0.x + 1.0 * r0.z - 2.0 * r1.x + 2.0 * r1.z - 1.0 * r2.x + 1.0 * r2.z;
+  let sy = -1.0 * r0.x - 2.0 * r0.y - 1.0 * r0.z + 1.0 * r2.x + 2.0 * r2.y + 1.0 * r2.z;
 
   imgOut[gy * w + gx] = sqrt(sx * sx + sy * sy);
 }`,

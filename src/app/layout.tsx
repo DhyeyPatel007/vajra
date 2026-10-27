@@ -1,23 +1,21 @@
 import type { Metadata } from "next";
-import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ["latin"],
+const geistSans = Geist({
   variable: "--font-sans",
-  weight: ["400", "500", "600", "700"],
+  subsets: ["latin"],
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
+const geistMono = Geist_Mono({
   variable: "--font-mono",
-  weight: ["400", "500", "600", "700"],
+  subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
   title: "Vajra — Browser-Native WebGPU Kernel Auto-Tuner",
   description:
-    "AI writes GPU shaders, but only your hardware knows the truth. Vajra benchmarks every Nemotron WGSL kernel live on your GPU and crowns the fastest.",
+    "Tunes per-device on any modern WebGPU browser, and falls back to recorded Preview where WebGPU is unavailable.",
 };
 
 export default function RootLayout({
@@ -26,8 +24,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${plusJakartaSans.variable} ${jetbrainsMono.variable}`}>
-      <body className="min-h-screen bg-[#0F1419] text-[#F1F5F9] font-sans antialiased selection:bg-[#F59E0B] selection:text-[#0F1419]">
+    <html lang="en">
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} min-h-screen bg-[#FAFAFA] text-[#171717] font-sans antialiased selection:bg-[#EAEAEA] selection:text-[#171717]`}
+      >
         {children}
       </body>
     </html>

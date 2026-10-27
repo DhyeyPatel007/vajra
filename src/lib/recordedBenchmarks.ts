@@ -15,7 +15,7 @@ export function getGen2RecordedResult(
         name: "Variant D: Gen 2 Shared Tile + Unrolled FMA Pipeline",
         strategy: "gen2_evolved",
         rationale:
-          "Replaces inner-loop vec4 dot-products with explicit 4-way fused multiply-add (fma) accumulation across 16x16 shared memory tiles (+10.7% vs Gen 1 Winner C).",
+          "Replaces inner-loop vec4 dot-products with explicit 4-way fused multiply-add (fma) accumulation across 16x16 shared memory tiles (+10.7% vs Gen 1 Winner C; recorded reference).",
         status: "VERIFIED_WINNER",
         workgroupSize: [16, 16, 1],
         dispatchGrid: [32, 32, 1],
@@ -42,7 +42,7 @@ export function getGen2RecordedResult(
         name: "Variant D: Gen 2 2-Pass Online Softmax + Vec4 Reciprocal",
         strategy: "gen2_evolved",
         rationale:
-          "Fuses max-finding and exponential summation into a single online rescaling sweep, cutting global memory reads from 3 passes to 2 (+14.8% vs Gen 1 Winner C; recorded M3 Max reference, live GPU re-measured on run).",
+          "Fuses max-finding and exponential summation into a single online rescaling sweep, cutting global memory reads from 3 passes to 2 (+14.8% vs Gen 1 Winner C; recorded reference).",
         status: "VERIFIED_WINNER",
         workgroupSize: [256, 1, 1],
         dispatchGrid: [4, 1, 1],
@@ -96,7 +96,7 @@ export function getGen2RecordedResult(
         name: "Variant D: Gen 2 18x18 Halo Tile + Scalar FMA Stencil",
         strategy: "gen2_evolved",
         rationale:
-          "Pairs 18x18 shared-memory apron tiling with direct scalar stencil differences and fma gradient magnitude accumulation (+14.4% vs Gen 1 Winner C).",
+          "Pairs 18x18 shared-memory apron tiling with direct scalar stencil differences and fma gradient magnitude accumulation (+14.4% vs Gen 1 Winner C; recorded reference).",
         status: "VERIFIED_WINNER",
         workgroupSize: [16, 16, 1],
         dispatchGrid: [128, 128, 1],

@@ -3,53 +3,53 @@
 @tailwind utilities;
 
 :root {
-  --canvas: #0F1419;
-  --surface: #161D24;
-  --well: #11171D;
-  --elevated: #1E2730;
-  --border-structural: #2A3542;
-  --amber-primary: #F59E0B;
-  --amber-hover: #FBBF24;
-  --amber-tint: #291F0E;
-  --text-primary: #F1F5F9;
-  --text-secondary: #94A3B8;
-  --text-muted: #64748B;
-  --verified-emerald: #10B981;
-  --verified-tint: #0B261F;
-  --danger-rose: #F43F5E;
-  --danger-tint: #2A1219;
+  --bg-canvas: #FAFAFA;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #F2F2F2;
+  --bg-hover: #EAEAEA;
+  --border-default: #EAEAEA;
+  --border-hover: #999999;
+  --border-strong: #171717;
+  --fg-primary: #171717;
+  --fg-secondary: #666666;
+  --fg-tertiary: #888888;
+  --accent-blue: #0070F3;
+  --status-success: #0A7143;
+  --status-warning: #9A5B13;
+  --status-danger: #C81E1E;
 }
 
 body {
-  background-color: #0F1419;
-  color: #F1F5F9;
-  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: #FAFAFA;
+  color: #171717;
+  font-family: var(--font-sans), "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Tabular numerals for precision instrumentation */
+/* Enforce tabular numerals across telemetry and numeric instrumentation */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-/* Crisp technical scrollbars */
+/* Minimalist Vercel scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #11171D;
+  background: #F2F2F2;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2A3542;
+  background: #D4D4D4;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #F59E0B;
+  background: #999999;
 }
 
 /* Monospace font styling */
 pre, code, .font-mono {
-  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono), "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }

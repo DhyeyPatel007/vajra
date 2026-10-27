@@ -86,7 +86,7 @@ export function parseNemotronResponse(rawText: string): GeneratedVariant[] {
 
   // Strip outer markdown json fences if present
   const fenceMatch = jsonString.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenceMatch) {
+  if (fenceMatch && fenceMatch[1]) {
     jsonString = fenceMatch[1].trim();
   } else {
     // Find first '{' and last '}'
@@ -202,7 +202,7 @@ export function parseNemotronGen2Response(
   let jsonString = rawText.trim();
 
   const fenceMatch = jsonString.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenceMatch) {
+  if (fenceMatch && fenceMatch[1]) {
     jsonString = fenceMatch[1].trim();
   } else {
     const start = jsonString.indexOf("{");

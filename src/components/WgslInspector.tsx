@@ -196,46 +196,46 @@ export async function runVerified_${workloadSpec.id}(
   const codeLines = displayedContent.split("\n");
 
   return (
-    <div className="rounded-lg border border-[#2A3542] bg-[#161D24] p-6 space-y-4">
+    <div className="rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] overflow-hidden shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
       {/* Top Header Row */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#2A3542] pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#EAEAEA] px-6 py-4">
         {/* Left: Title + 3 View Mode Pills */}
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
-            <Code2 className="h-5 w-5 text-[#F59E0B]" />
-            <span className="text-lg font-semibold text-[#F1F5F9]">
+            <Code2 className="h-5 w-5 text-[#171717]" />
+            <span className="text-[16px] font-semibold tracking-[-0.02em] text-[#171717]">
               Shader &amp; Artifact Inspector
             </span>
           </div>
 
           {/* View Mode Switcher Pills */}
-          <div className="flex items-center rounded-md border border-[#2A3542] bg-[#11171D] p-1 font-mono text-xs">
+          <div className="flex items-center rounded-md border border-[#EAEAEA] bg-[#F2F2F2] p-0.5 font-mono text-[12px]">
             <button
               onClick={() => setViewMode("wgsl")}
-              className={`rounded px-3 py-1 font-medium transition-colors ${
+              className={`rounded-[5px] px-3 py-1 font-medium transition-all ${
                 viewMode === "wgsl"
-                  ? "border border-[#F59E0B]/40 bg-[#1E2730] text-[#F59E0B]"
-                  : "text-[#94A3B8] hover:text-[#F1F5F9]"
+                  ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                  : "text-[#666666] hover:text-[#171717]"
               }`}
             >
               Raw Stitched WGSL
             </button>
             <button
               onClick={() => setViewMode("typescript")}
-              className={`rounded px-3 py-1 font-medium transition-colors ${
+              className={`rounded-[5px] px-3 py-1 font-medium transition-all ${
                 viewMode === "typescript"
-                  ? "border border-[#F59E0B]/40 bg-[#1E2730] text-[#F59E0B]"
-                  : "text-[#94A3B8] hover:text-[#F1F5F9]"
+                  ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                  : "text-[#666666] hover:text-[#171717]"
               }`}
             >
               Exported TS Dispatch Function
             </button>
             <button
               onClick={() => setViewMode("json")}
-              className={`rounded px-3 py-1 font-medium transition-colors ${
+              className={`rounded-[5px] px-3 py-1 font-medium transition-all ${
                 viewMode === "json"
-                  ? "border border-[#F59E0B]/40 bg-[#1E2730] text-[#F59E0B]"
-                  : "text-[#94A3B8] hover:text-[#F1F5F9]"
+                  ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                  : "text-[#666666] hover:text-[#171717]"
               }`}
             >
               Hardware Lockfile JSON
@@ -248,16 +248,16 @@ export async function runVerified_${workloadSpec.id}(
           {/* Export Hardware Lockfile JSON Button */}
           <button
             onClick={handleExportLockfile}
-            className="flex items-center gap-1.5 rounded-md border border-[#2A3542] bg-[#11171D] px-3.5 py-2 font-mono text-xs font-medium text-[#F1F5F9] transition-colors hover:bg-[#1E2730] hover:text-[#F59E0B]"
+            className="flex items-center gap-1.5 rounded-md border border-[#EAEAEA] bg-[#FFFFFF] px-3.5 py-2 font-mono text-[12px] font-medium text-[#171717] transition-colors hover:border-[#999999] hover:bg-[#FAFAFA] cursor-pointer"
           >
             {copiedLockfile ? (
               <>
-                <Check className="h-3.5 w-3.5 text-[#10B981]" />
-                <span className="text-[#10B981]">Copied Hardware Lockfile JSON!</span>
+                <Check className="h-3.5 w-3.5 text-[#0A7143]" />
+                <span className="text-[#0A7143]">Copied Hardware Lockfile JSON!</span>
               </>
             ) : (
               <>
-                <FileJson className="h-3.5 w-3.5 text-[#F59E0B]" />
+                <FileJson className="h-3.5 w-3.5 text-[#666666]" />
                 <span>Export Lockfile JSON</span>
               </>
             )}
@@ -266,16 +266,16 @@ export async function runVerified_${workloadSpec.id}(
           {/* Copy Current Tab Button */}
           <button
             onClick={handleCopyCurrent}
-            className="flex items-center gap-1.5 rounded-md border border-[#2A3542] bg-[#11171D] px-3.5 py-2 font-mono text-xs font-medium text-[#F1F5F9] transition-colors hover:bg-[#1E2730]"
+            className="flex items-center gap-1.5 rounded-md border border-[#EAEAEA] bg-[#FFFFFF] px-3.5 py-2 font-mono text-[12px] font-medium text-[#171717] transition-colors hover:border-[#999999] hover:bg-[#FAFAFA] cursor-pointer"
           >
             {copiedCurrent ? (
               <>
-                <Check className="h-3.5 w-3.5 text-[#10B981]" />
-                <span className="text-[#10B981]">Copied Tab WGSL!</span>
+                <Check className="h-3.5 w-3.5 text-[#0A7143]" />
+                <span className="text-[#0A7143]">Copied Tab WGSL!</span>
               </>
             ) : (
               <>
-                <Copy className="h-3.5 w-3.5 text-[#94A3B8]" />
+                <Copy className="h-3.5 w-3.5 text-[#666666]" />
                 <span>Copy This WGSL</span>
               </>
             )}
@@ -284,16 +284,16 @@ export async function runVerified_${workloadSpec.id}(
           {/* Copy Fastest Winner Button */}
           <button
             onClick={handleCopyFastest}
-            className="flex items-center gap-1.5 rounded-md bg-[#F59E0B] px-4 py-2 font-mono text-xs font-semibold text-[#0F1419] transition-colors hover:bg-[#FBBF24] active:translate-y-0.5"
+            className="flex items-center gap-1.5 rounded-md border border-[#171717] bg-[#171717] px-4 py-2 font-mono text-[12px] font-medium text-[#FFFFFF] transition-colors hover:bg-[#333333] active:bg-[#000000] cursor-pointer"
           >
             {copiedFastest ? (
               <>
-                <Check className="h-4 w-4 text-[#0F1419]" />
+                <Check className="h-4 w-4 text-[#FFFFFF]" />
                 <span>Copied Verified Fastest WGSL!</span>
               </>
             ) : (
               <>
-                <Trophy className="h-4 w-4 fill-current text-[#0F1419]" />
+                <Trophy className="h-4 w-4 fill-current text-[#FFFFFF]" />
                 <span>Copy Fastest WGSL</span>
               </>
             )}
@@ -301,12 +301,12 @@ export async function runVerified_${workloadSpec.id}(
         </div>
       </div>
 
-      {/* Variant Selector Tabs (only active in WGSL view mode) */}
+      {/* Variant Selector Tabs (only in WGSL mode) */}
       {viewMode === "wgsl" && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-[#2A3542] pb-3">
+        <div className="flex items-center gap-6 border-b border-[#EAEAEA] bg-[#FAFAFA] px-6 overflow-x-auto">
           {allItems.map((item) => {
             const isSelected = item.id === activeItem?.id;
-            const isWinner = item.isWinner;
+            const isWinner = item.id !== "baseline" && Boolean(item.isWinner);
             const isGen2 = item.generation === 2;
 
             let tabLabel =
@@ -324,20 +324,22 @@ export async function runVerified_${workloadSpec.id}(
               <button
                 key={item.id}
                 onClick={() => onSelectTab(item.id)}
-                className={`flex items-center gap-1.5 rounded-md px-4 py-2 font-mono text-xs transition-colors ${
+                className={`flex items-center gap-1.5 py-3 font-mono text-[12.5px] border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
                   isSelected
-                    ? "border border-[#F59E0B] bg-[#1E2730] text-[#F59E0B] font-semibold"
-                    : "border border-[#2A3542] bg-[#11171D] text-[#94A3B8] hover:bg-[#1E2730] hover:text-[#F1F5F9]"
+                    ? "border-[#171717] text-[#171717] font-semibold"
+                    : "border-transparent text-[#666666] hover:text-[#171717]"
                 }`}
               >
                 <span>{tabLabel}</span>
                 {isGen2 && (
-                  <span className="rounded bg-[#291F0E] px-1 text-[9px] text-[#F59E0B]">
+                  <span className="rounded border border-[#EAEAEA] bg-[#F2F2F2] px-1 py-0.2 text-[9px] text-[#171717]">
                     GEN 2
                   </span>
                 )}
                 {isWinner && (
-                  <Trophy className="h-3 w-3 text-[#F59E0B]" />
+                  <span className="rounded bg-[#171717] px-1.5 py-0.5 text-[10px] text-[#FFFFFF] font-sans">
+                    WINNER
+                  </span>
                 )}
               </button>
             );
@@ -346,14 +348,14 @@ export async function runVerified_${workloadSpec.id}(
       )}
 
       {/* Code Viewport with Line Numbers */}
-      <div className="rounded-lg border border-[#2A3542] bg-[#11171D] p-4 font-mono text-[13px] leading-relaxed max-h-[420px] overflow-auto">
+      <div className="bg-[#FAFAFA] p-5 font-mono text-[12.5px] leading-relaxed max-h-[440px] overflow-auto">
         <div className="table w-full">
           {codeLines.map((line, index) => (
-            <div key={index} className="table-row hover:bg-[#161D24]/60">
-              <span className="table-cell select-none pr-4 text-right text-[11px] text-[#64748B] w-10">
+            <div key={index} className="table-row hover:bg-[#F2F2F2]/80">
+              <span className="table-cell select-none pr-4 text-right text-[11px] text-[#888888] w-10 border-r border-[#EAEAEA]">
                 {index + 1}
               </span>
-              <span className="table-cell whitespace-pre text-[#F1F5F9]">
+              <span className="table-cell pl-4 whitespace-pre text-[#171717]">
                 {line || " "}
               </span>
             </div>

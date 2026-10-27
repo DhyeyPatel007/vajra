@@ -1,6 +1,6 @@
 # Vajra — WebGPU Kernel Auto-Tuner
 
-> "AI writes GPU shaders, but only your hardware knows the truth. Vajra benchmarks every Nemotron kernel live on your GPU and keeps the fastest."
+> "Tunes per-device on any modern WebGPU browser, and falls back to recorded Preview where WebGPU is unavailable."
 
 [![Next.js](https://img.shields.io/badge/Next.js-15.1-black?logo=next.js)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)](https://www.typescriptlang.org/)

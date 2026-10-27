@@ -102,16 +102,24 @@ export async function probeAndInitWebGpu(): Promise<HardwareProbeInfo & { contex
 }
 
 export function parseWorkgroupSize(wgslBody: string): [number, number, number] {
-  const match = wgslBody.match(
-    /@workgroup_size\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?(?:,\s*(\d+)\s*)?\)/
-  );
-  if (!match) {
+  if (!wgslBody || typeof wgslBody !== "string") {
     return [1, 1, 1];
   }
-  const x = parseInt(match[1], 10) || 1;
-  const y = parseInt(match[2] || "1", 10) || 1;
-  const z = parseInt(match[3] || "1", 10) || 1;
-  return [x, y, z];
+  try {
+    const match = wgslBody.match(
+      /@workgroup_size\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?(?:,\s*(\d+)\s*)?\)/
+    );
+    if (!match || !match[1]) {
+      return [1, 1, 1];
+    }
+    const x = parseInt(match[1], 10) || 1;
+    const y = match[2] ? parseInt(match[2], 10) || 1 : 1;
+    const z = match[3] ? parseInt(match[3], 10) || 1 : 1;
+    return [x, y, z];
+  } catch (err) {
+    console.warn("[Vajra] Error parsing workgroup size from WGSL body:", err);
+    return [1, 1, 1];
+  }
 }
 
 export function computeDispatchGrid(
@@ -119,9 +127,9 @@ export function computeDispatchGrid(
   workgroupSize: [number, number, number],
   elementsPerThread: [number, number, number] = [1, 1, 1]
 ): [number, number, number] {
-  const gx = Math.ceil(problemDims[0] / (workgroupSize[0] * (elementsPerThread[0] || 1)));
-  const gy = Math.ceil(problemDims[1] / (workgroupSize[1] * (elementsPerThread[1] || 1)));
-  const gz = Math.ceil(problemDims[2] / (workgroupSize[2] * (elementsPerThread[2] || 1)));
+  const gx = Math.ceil(problemDims[0] / ((workgroupSize?.[0] || 1) * (elementsPerThread?.[0] || 1)));
+  const gy = Math.ceil(problemDims[1] / ((workgroupSize?.[1] || 1) * (elementsPerThread?.[1] || 1)));
+  const gz = Math.ceil(problemDims[2] / ((workgroupSize?.[2] || 1) * (elementsPerThread?.[2] || 1)));
   return [Math.max(1, gx), Math.max(1, gy), Math.max(1, gz)];
 }
 
@@ -133,28 +141,39 @@ export function analyzeWgslFootprint(
   invocationsPerWorkgroup: number;
 } {
   let sharedMemoryBytes = 0;
-  const regex = /var<workgroup>\s+\w+\s*:\s*array<\s*([a-zA-Z0-9_<>]+)\s*,\s*(\d+)\s*>/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(wgslCode)) !== null) {
-    const type = match[1].trim();
-    const count = parseInt(match[2], 10) || 0;
-    let bytePerElem = 4;
-    if (type.includes("vec4")) {
-      bytePerElem = 16;
-    } else if (type.includes("vec3")) {
-      bytePerElem = 16;
-    } else if (type.includes("vec2")) {
-      bytePerElem = 8;
-    } else {
-      bytePerElem = 4;
+  if (!wgslCode || typeof wgslCode !== "string") {
+    const invocations =
+      (workgroupSize?.[0] || 1) * (workgroupSize?.[1] || 1) * (workgroupSize?.[2] || 1);
+    return { sharedMemoryBytes: 0, invocationsPerWorkgroup: Math.max(1, invocations) };
+  }
+
+  try {
+    const regex = /var<workgroup>\s+\w+\s*:\s*array<\s*([a-zA-Z0-9_<>]+)\s*,\s*(\d+)\s*>/g;
+    let match: RegExpExecArray | null = null;
+    while ((match = regex.exec(wgslCode)) !== null) {
+      if (!match || !match[1]) {
+        continue;
+      }
+      const type = (match[1] || "").trim();
+      const count = match[2] ? parseInt(match[2], 10) || 0 : 0;
+      let bytePerElem = 4;
+      if (type.includes("vec4") || type.includes("vec3")) {
+        bytePerElem = 16;
+      } else if (type.includes("vec2")) {
+        bytePerElem = 8;
+      } else {
+        bytePerElem = 4;
+      }
+      sharedMemoryBytes += count * bytePerElem;
     }
-    sharedMemoryBytes += count * bytePerElem;
+  } catch (err) {
+    console.warn("[Vajra] Error analyzing shared memory footprint:", err);
   }
 
   const invocationsPerWorkgroup =
-    workgroupSize[0] * workgroupSize[1] * workgroupSize[2];
+    (workgroupSize?.[0] || 1) * (workgroupSize?.[1] || 1) * (workgroupSize?.[2] || 1);
 
-  return { sharedMemoryBytes, invocationsPerWorkgroup };
+  return { sharedMemoryBytes, invocationsPerWorkgroup: Math.max(1, invocationsPerWorkgroup) };
 }
 
 export interface CompilationResult {
@@ -171,25 +190,58 @@ export async function compileShaderModule(
   wgslBody: string,
   workgroupSize?: [number, number, number]
 ): Promise<CompilationResult> {
-  const fullWgsl = `${workload.wgslPreamble}\n\n${wgslBody}`;
+  const fullWgsl = `${workload?.wgslPreamble || ""}\n\n${wgslBody || ""}`;
   const errors: string[] = [];
-  const wgSize = workgroupSize || parseWorkgroupSize(wgslBody);
-  const { sharedMemoryBytes, invocationsPerWorkgroup } = analyzeWgslFootprint(
-    fullWgsl,
-    wgSize
-  );
 
-  // KernelTuner / CLTune device limit pre-checks
-  if (device.limits) {
-    if (invocationsPerWorkgroup > device.limits.maxComputeInvocationsPerWorkgroup) {
+  let wgSize: [number, number, number] = [1, 1, 1];
+  try {
+    wgSize = workgroupSize || parseWorkgroupSize(wgslBody);
+  } catch (err) {
+    console.warn("[Vajra] Error determining workgroup size:", err);
+    wgSize = [1, 1, 1];
+  }
+
+  let sharedMemoryBytes = 0;
+  let invocationsPerWorkgroup = 1;
+  try {
+    const footprint = analyzeWgslFootprint(fullWgsl, wgSize);
+    sharedMemoryBytes = footprint.sharedMemoryBytes;
+    invocationsPerWorkgroup = footprint.invocationsPerWorkgroup;
+  } catch (err) {
+    console.warn("[Vajra] Error analyzing WGSL footprint:", err);
+  }
+
+  // Multi-vendor device limit pre-checks (KernelTuner / CLTune methodology)
+  // Dynamically reads adapter limits from the active GPU device — NEVER hardcoded to M3 Max
+  if (device && device.limits) {
+    const limits = device.limits;
+    if (wgSize[0] > (limits.maxComputeWorkgroupSizeX ?? 256)) {
       errors.push(
-        `Hardware Limit Exceeded: Invocations per workgroup (${invocationsPerWorkgroup}) exceeds device limit (${device.limits.maxComputeInvocationsPerWorkgroup}).`
+        `Hardware Limit Exceeded: Workgroup size X (${wgSize[0]}) exceeds device limit (${limits.maxComputeWorkgroupSizeX}).`
       );
       return { ok: false, errors, fullWgsl, sharedMemoryBytes };
     }
-    if (sharedMemoryBytes > device.limits.maxComputeWorkgroupStorageSize) {
+    if (wgSize[1] > (limits.maxComputeWorkgroupSizeY ?? 256)) {
       errors.push(
-        `Hardware Limit Exceeded: Shared memory (${sharedMemoryBytes} bytes) exceeds workgroup storage limit (${device.limits.maxComputeWorkgroupStorageSize} bytes).`
+        `Hardware Limit Exceeded: Workgroup size Y (${wgSize[1]}) exceeds device limit (${limits.maxComputeWorkgroupSizeY}).`
+      );
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
+    }
+    if (wgSize[2] > (limits.maxComputeWorkgroupSizeZ ?? 64)) {
+      errors.push(
+        `Hardware Limit Exceeded: Workgroup size Z (${wgSize[2]}) exceeds device limit (${limits.maxComputeWorkgroupSizeZ}).`
+      );
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
+    }
+    if (invocationsPerWorkgroup > (limits.maxComputeInvocationsPerWorkgroup ?? 256)) {
+      errors.push(
+        `Hardware Limit Exceeded: Invocations per workgroup (${invocationsPerWorkgroup}) exceeds device limit (${limits.maxComputeInvocationsPerWorkgroup}).`
+      );
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
+    }
+    if (sharedMemoryBytes > (limits.maxComputeWorkgroupStorageSize ?? 16384)) {
+      errors.push(
+        `Hardware Limit Exceeded: Shared memory (${sharedMemoryBytes} bytes) exceeds workgroup storage limit (${limits.maxComputeWorkgroupStorageSize} bytes).`
       );
       return { ok: false, errors, fullWgsl, sharedMemoryBytes };
     }
