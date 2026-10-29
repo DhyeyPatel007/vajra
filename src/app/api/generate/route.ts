@@ -16,6 +16,7 @@ import {
   buildNemotronGen2UserPrompt,
   parseNemotronGen2Response,
 } from "@/lib/nemotronPrompt";
+import { tavilySearchGrounding } from "@/lib/tavily";
 
 export const maxDuration = 120;
 
@@ -174,7 +175,7 @@ export async function POST(req: NextRequest) {
     const systemPrompt = isGen2
       ? buildNemotronGen2SystemPrompt(maxWorkgroupSize)
       : buildNemotronSystemPrompt(maxWorkgroupSize);
-    const userPrompt = isGen2
+    let userPrompt = isGen2
       ? buildNemotronGen2UserPrompt(
           workload,
           previousWinner
@@ -191,6 +192,25 @@ export async function POST(req: NextRequest) {
           forceStandardGen2
         )
       : buildNemotronUserPrompt(workload, maxWorkgroupSize);
+
+    // Optional Tavily Search grounding (Gen 1 Live only, 1 call, 3.5s timeout, non-blocking fallback)
+    let tavilyGrounding: { query: string; sources: Array<{ title: string; url: string }> } | undefined = undefined;
+    if (!isGen2 && !isMock) {
+      try {
+        const tavilyRes = await tavilySearchGrounding(workloadId as WorkloadId);
+        if (tavilyRes && tavilyRes.sources.length > 0) {
+          tavilyGrounding = {
+            query: tavilyRes.query,
+            sources: tavilyRes.sources,
+          };
+          if (tavilyRes.contentSnippets && tavilyRes.contentSnippets.length > 0) {
+            userPrompt += `\n\nLive W3C WGSL Grounding Snippets (via Tavily Search):\n${tavilyRes.contentSnippets.slice(0, 2).join("\n")}`;
+          }
+        }
+      } catch (tavilyErr) {
+        console.warn("[Vajra] Tavily search non-fatal failure:", tavilyErr);
+      }
+    }
 
     const callSingleAttempt = async (
       model: string,
@@ -441,6 +461,7 @@ export async function POST(req: NextRequest) {
         usedFallbackModel: false,
         latencyMs: Date.now() - startTime,
         variants,
+        tavilyGrounding,
       };
       return NextResponse.json(response, { status: 200 });
     } catch (primaryErr: unknown) {
@@ -462,6 +483,7 @@ export async function POST(req: NextRequest) {
           usedFallbackModel: true,
           latencyMs: Date.now() - startTime,
           variants,
+          tavilyGrounding,
         };
         return NextResponse.json(response, { status: 200 });
       } catch (fallbackErr: unknown) {

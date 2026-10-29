@@ -15,7 +15,7 @@ import {
   WorkloadId,
   getStrategyBadgeLabel,
 } from "@/types/vajra";
-import { computeGen2Uplift, copyToClipboard, getDeterministicErrorSummary } from "@/lib/benchmarkUtils";
+import { computeGen2Uplift, copyToClipboard, formatGflops, getDeterministicErrorSummary } from "@/lib/benchmarkUtils";
 
 interface VariantCardGridProps {
   baseline: VariantExecutionResult | null;
@@ -302,7 +302,7 @@ const VariantCardItem: React.FC<VariantCardItemProps> = ({
             <div>
               <div className="text-[10px] text-[#888888] uppercase">THROUGHPUT</div>
               <div className="text-[22px] font-semibold text-[#171717] tabular-nums leading-tight whitespace-nowrap">
-                {card.gflops ? `${card.gflops.toFixed(1)}` : "—"}{" "}
+                {formatGflops(card.gflops)}{" "}
                 <span className="text-xs font-normal text-[#666666]">GFLOPS</span>
               </div>
             </div>
@@ -376,8 +376,18 @@ const VariantCardItem: React.FC<VariantCardItemProps> = ({
                 </div>
                 <div className="col-span-2">
                   <span className="text-[#888888]">Rel Error: </span>
-                  <span className="text-[#0A7143] font-semibold">
-                    {card.maxRelativeError !== null
+                  <span className={`font-semibold ${
+                    card.status === "COMPILE_FAILED"
+                      ? "text-[#666666]"
+                      : card.status === "VERIFY_FAILED"
+                      ? "text-[#C81E1E]"
+                      : "text-[#0A7143]"
+                  }`}>
+                    {card.status === "COMPILE_FAILED"
+                      ? "—"
+                      : card.status === "VERIFY_FAILED"
+                      ? `${card.maxRelativeError !== null ? card.maxRelativeError.toExponential(2) : "—"} (Exceeds 1e-4)`
+                      : card.maxRelativeError !== null
                       ? card.maxRelativeError === 0
                         ? "0.0 (Exact)"
                         : card.maxRelativeError.toExponential(2)

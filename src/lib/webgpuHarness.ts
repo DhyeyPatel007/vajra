@@ -6,6 +6,7 @@ import {
   WorkloadSpec,
 } from "@/types/vajra";
 import { WORKLOADS } from "./workloads";
+import { hoistWorkgroupVarsAndFixConst } from "./wgslValidator";
 
 export interface WebGpuContext {
   adapter: GPUAdapter;
@@ -308,7 +309,8 @@ export async function compileShaderModule(
   wgslBody: string,
   workgroupSize?: [number, number, number]
 ): Promise<CompilationResult> {
-  const repairedBody = repairEarlyReturnBeforeBarrier(wgslBody, workload?.id);
+  const normalizedBody = hoistWorkgroupVarsAndFixConst(wgslBody);
+  const repairedBody = repairEarlyReturnBeforeBarrier(normalizedBody, workload?.id);
   const fullWgsl = `${workload?.wgslPreamble || ""}\n\n${repairedBody || ""}`;
   const errors: string[] = [];
 

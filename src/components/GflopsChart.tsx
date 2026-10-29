@@ -3,6 +3,7 @@
 import React from "react";
 import { VariantExecutionResult, getStrategyBadgeLabel } from "@/types/vajra";
 import { Trophy, AlertCircle } from "lucide-react";
+import { formatGflops } from "@/lib/benchmarkUtils";
 
 interface GflopsChartProps {
   baseline: VariantExecutionResult | null;
@@ -115,7 +116,7 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
                   {/* Right Tabular Readout (Guaranteed no truncation) */}
                   {item.gflops && !isFailed && !isVerFailed ? (
                     <div className="font-mono text-[14px] font-semibold text-[#171717] whitespace-nowrap tabular-nums">
-                      {item.gflops.toFixed(1)} GFLOPS{" "}
+                      {formatGflops(item.gflops)} GFLOPS{" "}
                       <span className="text-[12px] font-normal text-[#666666]">
                         ({item.id === "baseline"
                           ? "1.00x Ref"
@@ -153,7 +154,7 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
                       }`}
                     >
                       <span className="font-mono text-[12.5px] font-semibold tracking-tight whitespace-nowrap tabular-nums">
-                        {item.gflops.toFixed(1)} GFLOPS
+                        {formatGflops(item.gflops)} GFLOPS
                       </span>
                       <span className="ml-1.5 font-mono text-[11px] font-medium whitespace-nowrap opacity-90">
                         {item.id === "baseline"

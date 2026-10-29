@@ -1,5 +1,15 @@
 import { VariantExecutionResult } from "@/types/vajra";
 
+/**
+ * Formats GFLOPS:
+ * When < 10, formats with 2 decimal places (e.g. 0.12, 0.52).
+ * When >= 10, formats with 1 decimal place (e.g. 48.3, 112.5).
+ */
+export function formatGflops(val: number | null | undefined): string {
+  if (val === null || val === undefined || isNaN(val) || val <= 0) return "—";
+  return val < 10 ? val.toFixed(2) : val.toFixed(1);
+}
+
 export interface Gen2UpliftInfo {
   upliftPct: number;
   formattedPct: string;

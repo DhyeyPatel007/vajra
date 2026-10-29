@@ -91,12 +91,23 @@ export const FailureGraveyard: React.FC<FailureGraveyardProps> = ({ variants }) 
               v.compileErrors.length > 0
                 ? v.compileErrors[0]
                 : isCompile
-                ? "Line 18:14 — error: unresolved call target 'unknown_intrinsic_fn(u32)'"
-                : `Max relative float error (${v.maxRelativeError?.toExponential(2)}) exceeded strict 1e-4 tolerance.`;
+                ? (v.isSimulatedFailure
+                    ? "Line 18:14 — error: unresolved call target 'unknown_intrinsic_fn(u32)'"
+                    : "WebGPU shader compilation error")
+                : `Max relative float error (${v.maxRelativeError !== null && v.maxRelativeError !== undefined ? v.maxRelativeError.toExponential(2) : "—"}) exceeded strict 1e-4 tolerance.`;
 
-            const snippet = isCompile
-              ? `// Offending line rejected by WebGPU compiler:\nLine 18:14: let broken: vec4<f32> = unknown_intrinsic_fn(gid.x);`
-              : `// Numerical tolerance verification failed:\nMeasured error: ${v.maxRelativeError?.toExponential(3)} (tolerance threshold: 1.000e-4)`;
+            let snippet = "";
+            if (isCompile) {
+              if (v.isSimulatedFailure) {
+                snippet = `// Offending line rejected by WebGPU compiler (Simulated):\nLine 18:14: let broken: vec4<f32> = unknown_intrinsic_fn(gid.x);`;
+              } else if (v.compileErrors.length > 0) {
+                snippet = `// Offending compiler diagnostic:\n${v.compileErrors.join("\n")}`;
+              } else {
+                snippet = `// WebGPU shader compilation error:\nShader module compilation rejected by WebGPU device.`;
+              }
+            } else {
+              snippet = `// Numerical tolerance verification failed:\nMeasured error: ${v.maxRelativeError !== null && v.maxRelativeError !== undefined ? v.maxRelativeError.toExponential(3) : "—"} (tolerance threshold: 1.000e-4)`;
+            }
 
             return (
               <div

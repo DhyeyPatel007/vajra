@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { Copy, Check, Code2, Trophy, FileJson } from "lucide-react";
 import { VariantExecutionResult, WorkloadId } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
-import { copyToClipboard } from "@/lib/benchmarkUtils";
+import { copyToClipboard, formatGflops } from "@/lib/benchmarkUtils";
 
 interface WgslInspectorProps {
   variants: VariantExecutionResult[];
@@ -140,7 +140,7 @@ export const WgslInspector: React.FC<WgslInspectorProps> = ({
  * Hardware Receipt: ${adapterDescription}
  * Workload: ${workloadSpec.name} (${workloadSpec.dimensionsLabel})
  * Winning Variant: ${winnerItem.name}
- * Throughput: ${winnerItem.gflops ? winnerItem.gflops.toFixed(1) : "—"} GFLOPS (${winnerItem.speedupVsBaseline ? winnerItem.speedupVsBaseline.toFixed(2) : "1.00"}x Speedup)
+ * Throughput: ${formatGflops(winnerItem.gflops)} GFLOPS (${winnerItem.speedupVsBaseline ? winnerItem.speedupVsBaseline.toFixed(2) : "1.00"}x Speedup)
  * Median Latency: ${winnerItem.medianTimeMs ? winnerItem.medianTimeMs.toFixed(3) : "—"} ms (9-run median)
  * Workgroup Size: (${winnerItem.workgroupSize.join(", ")})
  * Dispatch Grid: [${winnerItem.dispatchGrid.join(", ")}]

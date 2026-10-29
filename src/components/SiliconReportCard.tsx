@@ -16,7 +16,7 @@ import {
 } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
 
-import { computeGen2Uplift } from "@/lib/benchmarkUtils";
+import { computeGen2Uplift, formatGflops } from "@/lib/benchmarkUtils";
 
 interface SiliconReportCardProps {
   winner: VariantExecutionResult | null;
@@ -169,7 +169,7 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
             </div>
             <div className="mt-1 flex items-baseline gap-1">
               <span className="font-mono text-[36px] font-semibold tracking-[-0.04em] text-[#171717] leading-none whitespace-nowrap tabular-nums">
-                {winner.gflops ? winner.gflops.toFixed(1) : "—"}
+                {formatGflops(winner.gflops)}
               </span>
               <span className="font-mono text-[13px] font-normal text-[#666666]">
                 GFLOPS

@@ -150,6 +150,10 @@ export interface GenerateResponse {
   usedFallbackModel: boolean;
   latencyMs: number;
   variants: GeneratedVariant[];
+  tavilyGrounding?: {
+    query: string;
+    sources: Array<{ title: string; url: string }>;
+  };
 }
 
 export interface GenerateErrorResponse {

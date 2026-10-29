@@ -12,7 +12,7 @@ import {
 } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
 import { RECORDED_BENCHMARKS, getGen2RecordedResult } from "@/lib/recordedBenchmarks";
-import { computeGen2Uplift } from "@/lib/benchmarkUtils";
+import { computeGen2Uplift, formatGflops } from "@/lib/benchmarkUtils";
 import {
   probeAndInitWebGpu,
   compileShaderModule,
@@ -73,6 +73,20 @@ export default function VajraDashboard() {
   >("mock");
   const [activeModelId, setActiveModelId] = useState<string>("mock-nemotron-local");
   const [usedFallbackModel, setUsedFallbackModel] = useState<boolean>(false);
+
+  // Tavily Search Grounding & BYOK States
+  const [tavilyGrounding, setTavilyGrounding] = useState<{
+    query: string;
+    sources: Array<{ title: string; url: string }>;
+  } | null>(null);
+  const [showByok, setShowByok] = useState<boolean>(false);
+  const [byokUrl, setByokUrl] = useState<string>("");
+  const [byokLoading, setByokLoading] = useState<boolean>(false);
+  const [byokError, setByokError] = useState<string | null>(null);
+  const [importedBaselineInfo, setImportedBaselineInfo] = useState<{
+    originalUrl: string;
+    requiredBindings: string[];
+  } | null>(null);
 
   // Helper to load recorded fallback benchmarks statically or with simulation
   const loadRecordedBenchmark = useCallback(
@@ -355,6 +369,9 @@ export default function VajraDashboard() {
         setActiveModelSource(genData.source);
         setActiveModelId(genData.modelId);
         setUsedFallbackModel(genData.usedFallbackModel);
+        if (genData.tavilyGrounding) {
+          setTavilyGrounding(genData.tavilyGrounding);
+        }
 
         const rec = RECORDED_BENCHMARKS[workloadId];
         setBaselineResult(rec.baseline);
@@ -575,6 +592,9 @@ export default function VajraDashboard() {
         setActiveModelSource(genData.source);
         setActiveModelId(genData.modelId);
         setUsedFallbackModel(genData.usedFallbackModel);
+        if (genData.tavilyGrounding) {
+          setTavilyGrounding(genData.tavilyGrounding);
+        }
 
         const currentVariants: VariantExecutionResult[] = [];
 
@@ -938,6 +958,89 @@ export default function VajraDashboard() {
       setSimulateCompileError(false);
     }
     runPipeline(selectedWorkloadId, activeMode, sim);
+  };
+
+  // Handle Bring Your Own Kernel (BYOK) Extraction via Tavily
+  const handleImportByok = async () => {
+    if (!byokUrl.trim()) {
+      setByokError("Please enter a public GitHub .wgsl file URL.");
+      return;
+    }
+    setByokLoading(true);
+    setByokError(null);
+    try {
+      const res = await fetch("/api/tavily-import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: byokUrl.trim(), workloadId: selectedWorkloadId }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setByokError(data.error || "Tavily Extract failed.");
+        setByokLoading(false);
+        return;
+      }
+
+      const ctx = webGpuCtxRef.current;
+      const workload = WORKLOADS[selectedWorkloadId];
+      setImportedBaselineInfo({
+        originalUrl: data.originalUrl,
+        requiredBindings: data.requiredBindings,
+      });
+
+      if (ctx && ctx.device && !previewNoWebGpu) {
+        const compilation = await compileShaderModule(ctx.device, workload, data.wgsl);
+        if (!compilation.ok || !compilation.pipeline) {
+          setByokError(`Extracted kernel failed compilation: ${compilation.errors.join("; ")}`);
+          setByokLoading(false);
+          return;
+        }
+        const runner = new WebGpuBenchmarkRunner(ctx.device, probe.supportsTimestampQuery);
+        const inputs = workload.generateInputs();
+        const dispatchGrid = computeDispatchGrid(workload.problemDims, workload.baselineWorkgroupSize);
+        const bench = await runner.benchmarkKernel(
+          compilation.pipeline,
+          workload,
+          dispatchGrid,
+          inputs
+        );
+        const customBase: VariantExecutionResult = {
+          id: "baseline",
+          name: "Imported GitHub Baseline (LIVE TAVILY EXTRACT)",
+          strategy: "baseline",
+          rationale: `Extracted via Tavily from ${data.originalUrl}`,
+          status: "IDLE",
+          workgroupSize: workload.baselineWorkgroupSize,
+          dispatchGrid,
+          compileErrors: [],
+          verified: true,
+          maxRelativeError: 0,
+          medianTimeMs: bench.medianTimeMs,
+          allRunTimesMs: bench.allRunTimesMs,
+          gflops: bench.gflops,
+          derivedBandwidthGBps: bench.derivedBandwidthGBps,
+          speedupVsBaseline: 1.0,
+          fullWgslCode: compilation.fullWgsl,
+          isWinner: false,
+        };
+        setBaselineResult(customBase);
+      } else {
+        setBaselineResult((prev) =>
+          prev
+            ? {
+                ...prev,
+                name: "Imported GitHub Baseline (LIVE TAVILY EXTRACT)",
+                fullWgslCode: `${workload.wgslPreamble}\n\n${data.wgsl}`,
+              }
+            : null
+        );
+      }
+      setByokLoading(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setByokError(`Extraction failed: ${msg}`);
+      setByokLoading(false);
+    }
   };
 
   // Handle Refine Winner (Gen 2) Action Trigger
@@ -1557,6 +1660,102 @@ export default function VajraDashboard() {
                   FALL BACK TO MOCK KERNELS
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tavily Web Intelligence Bar */}
+        {tavilyGrounding && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#CCE3FF] bg-[#F0F7FF] px-4 py-2.5 font-mono text-xs text-[#0070F3] shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+            <div className="flex items-center gap-2">
+              <span className="rounded bg-[#0070F3] px-1.5 py-0.5 text-[10px] font-bold text-[#FFFFFF]">TAVILY SEARCH GROUNDING</span>
+              <span className="text-[#171717] font-medium">Query: &quot;{tavilyGrounding.query}&quot;</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[#666666]">Sources:</span>
+              {tavilyGrounding.sources.map((s, idx) => (
+                <a
+                  key={idx}
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline hover:text-[#0051B3] transition-colors truncate max-w-[200px]"
+                  title={s.title}
+                >
+                  [{idx + 1}] {s.title}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Bring Your Own Kernel (GitHub URL) - Opt-In Minimal BYOK */}
+        <div className="rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] p-3 text-xs font-mono shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setShowByok(!showByok)}
+              className="flex items-center gap-2 font-medium text-[#171717] hover:text-[#0070F3] transition-colors cursor-pointer"
+            >
+              <span>Bring Your Own Kernel (GitHub URL)</span>
+              <span className="text-[10px] rounded border border-[#EAEAEA] bg-[#FAFAFA] px-1.5 py-0.5 text-[#666666]">
+                {showByok ? "Hide" : "Expand"}
+              </span>
+            </button>
+            {importedBaselineInfo && (
+              <span className="rounded-full border border-[#B8E8D0] bg-[#E6F6EE] px-2.5 py-0.5 text-[10.5px] font-bold text-[#0A7143]">
+                Imported GitHub Baseline (LIVE TAVILY EXTRACT)
+              </span>
+            )}
+          </div>
+          {showByok && (
+            <div className="mt-3 pt-3 border-t border-[#EAEAEA] space-y-2">
+              <p className="text-[#666666] text-[11px]">
+                Paste a public GitHub file URL implementing the {activeWorkloadSpec.name} interface.
+                Tavily Extract will pull and validate the WGSL shader against the required {selectedWorkloadId} bindings.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={byokUrl}
+                  onChange={(e) => setByokUrl(e.target.value)}
+                  placeholder="https://github.com/username/repo/blob/main/kernel.wgsl"
+                  className="flex-1 rounded border border-[#EAEAEA] bg-[#FAFAFA] px-3 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:border-[#171717]"
+                  disabled={byokLoading}
+                />
+                <button
+                  type="button"
+                  onClick={handleImportByok}
+                  disabled={byokLoading || !byokUrl.trim()}
+                  className="rounded border border-[#171717] bg-[#171717] px-3 py-1.5 text-xs font-semibold text-[#FFFFFF] hover:bg-[#333333] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {byokLoading ? "Extracting via Tavily..." : "Extract via Tavily & Set as Baseline"}
+                </button>
+              </div>
+              {byokError && (
+                <div className="rounded border border-[#FFD6D6] bg-[#FFF0F0] p-2 text-[11px] text-[#C81E1E]">
+                  {byokError}
+                </div>
+              )}
+              {importedBaselineInfo && (
+                <div className="rounded border border-[#B8E8D0] bg-[#E6F6EE] p-2 text-[11px] text-[#0A7143]">
+                  Successfully extracted kernel from:{" "}
+                  <a href={importedBaselineInfo.originalUrl} target="_blank" rel="noreferrer" className="underline">
+                    {importedBaselineInfo.originalUrl}
+                  </a>
+                  . Verified binding contract: [{importedBaselineInfo.requiredBindings.join(", ")}].
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* What Changed Comparison Strip */}
+        {importedBaselineInfo && winnerResult && winnerResult.id !== "baseline" && (
+          <div className="rounded-lg border border-[#B8E8D0] bg-[#E6F6EE] px-4 py-3 font-mono text-xs text-[#0A7143]">
+            <div className="font-bold uppercase tracking-wider">What Changed: Custom GitHub Baseline vs Nemotron Winner</div>
+            <div className="mt-1 text-[11.5px] text-[#065F46]">
+              Your custom GitHub kernel achieved {baselineResult?.gflops ? formatGflops(baselineResult.gflops) : "—"} GFLOPS. Nemotron&apos;s winning kernel ({winnerResult.name}) achieved {formatGflops(winnerResult.gflops)} GFLOPS ({winnerResult.speedupVsBaseline?.toFixed(2)}x speedup) on your physical silicon.
             </div>
           </div>
         )}

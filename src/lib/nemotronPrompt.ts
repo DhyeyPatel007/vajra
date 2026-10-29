@@ -1,5 +1,6 @@
 import { GeneratedVariant, WorkloadSpec } from "@/types/vajra";
 import { parseWorkgroupSize, repairEarlyReturnBeforeBarrier } from "./webgpuHarness";
+import { hoistWorkgroupVarsAndFixConst } from "./wgslValidator";
 
 /**
  * Repairs module-scope 'let' declarations into 'const'.
@@ -141,14 +142,18 @@ CRITICAL HARDWARE & LANGUAGE CONSTRAINTS:
    - For Sobel: Border pixels (x == 0u || y == 0u || x >= params.width - 1u || y >= params.height - 1u) write 0.0 to imgOut[y * params.width + x]. Interior pixels compute exact Sobel gradients: gx = -tl - 2.0*ml - bl + tr + 2.0*mr + br; gy = -tl - 2.0*tm - tr + bl + 2.0*bm + br; imgOut[y * params.width + x] = sqrt(gx * gx + gy * gy);. Keep uniform barriers.
 5. **VEC4 VECTORIZATION & TAIL BOUNDS RULES:**
    Set elementsPerThread to [1, 1, 1]. 1 thread computes 1 output element (or 1 row for Softmax).
-   You MUST use explicit vec4<f32> types and dot() intrinsics in Variant C, constructed from scalar storage arrays:
+   All storage buffers are bound as scalar array<f32>, NEVER array<vec4<f32>>. You MUST assemble vec4 vectors from scalar elements:
    - For matmul: Step k from 0u to params.K step 4u:
      let aVec = vec4<f32>(matrixA[row * params.K + k], matrixA[row * params.K + k + 1u], matrixA[row * params.K + k + 2u], matrixA[row * params.K + k + 3u]);
      let bVec = vec4<f32>(matrixB[(k + 0u) * params.N + col], matrixB[(k + 1u) * params.N + col], matrixB[(k + 2u) * params.N + col], matrixB[(k + 3u) * params.N + col]);
      sum += dot(aVec, bVec);
    - For conv1d: Whenever reading signalIn[idx + k], you MUST guard out-of-bounds indices at the end of the signal using select(0.0, signalIn[idx + k], (idx + k) < params.signalLen). Step k by 4u and accumulate with dot(vSig, vW).
    - For softmax: Step c by 4u, loading let v = vec4<f32>(inputBuf[base+c], inputBuf[base+c+1u], inputBuf[base+c+2u], inputBuf[base+c+3u]); in all 3 passes.
-6. MODULE-SCOPE VARIABLES: In WGSL, 'let' is strictly forbidden at module scope (outside functions). Module scope may ONLY use 'const' (for compile-time constants like filters/masks) or 'var<workgroup>' (for shared memory). 'let' is ONLY valid inside function bodies (e.g. inside fn main). NEVER declare 'let' at module scope.
+6. **W3C WGSL ADDRESS SPACES & SCOPE RULES (CRITICAL):**
+   - var<workgroup> shared arrays MUST ONLY be declared at MODULE SCOPE (outside of functions, before @compute). NEVER declare var<workgroup> inside fn main(...) or any function — function-scope workgroup vars are invalid W3C WGSL and trigger compiler rejections!
+   - In WGSL, const is strictly for compile-time constant expressions (literals and const-eval). NEVER use const inside fn main(...) for expressions reading uniforms (params.*), builtins (gid.*, lid.*), or arrays. Inside functions, ALWAYS use let for immutable bindings (e.g., let row = gid.y;, let w = params.width;).
+   - In WGSL, 'let' is FORBIDDEN at module scope (outside functions). Module scope only permits const (compile-time values) or var<workgroup>.
+   - Never use C++ keywords like auto. Use let or var.
 7. WORKGROUP SIZE HARDWARE LIMIT: The target GPU hardware limit is STRICTLY ${maxWorkgroupSize} total threads per workgroup (X * Y * Z <= ${maxWorkgroupSize}).
    NEVER generate @workgroup_size(1024, 1, 1), @workgroup_size(32, 32, 1), or any workgroup where X * Y * Z > ${maxWorkgroupSize}. For 2D workloads use (16, 16, 1) or (8, 8, 1). For 1D workloads use (256, 1, 1), (128, 1, 1), or (64, 1, 1).
 8. ZERO COMMENTS & CONCISE KERNEL BODIES: Write ZERO comments (no // or /* */) inside wgslBody so JSON output stays compact and never truncates on Sobel. Keep rationale to 1 sentence.
@@ -254,6 +259,9 @@ export function sanitizeWgslBody(rawBody: string, maxWorkgroupSize: number = 256
   // Strip duplicate struct Params definitions
   cleaned = cleaned.replace(/struct\s+Params\s*\{[^}]*\};?/g, "");
 
+  // Hoist function-scope var<workgroup> to module scope and rewrite runtime const/auto to let
+  cleaned = hoistWorkgroupVarsAndFixConst(cleaned);
+
   // Repair module-scope 'let' to 'const'
   cleaned = repairModuleScopeLet(cleaned);
 
@@ -328,7 +336,12 @@ CRITICAL GEN 2 CONSTRAINTS:
 1. PREAMBLE IS FIXED: Do NOT output struct Params or any @group(0) @binding(...) declarations.
 2. FUSED EVOLUTION: Fuse the winning Gen 1 strategy with register caching, 4-way unrolled fma() accumulation, and uniform shared memory tiling.
 3. **BARRIER UNIFORMITY: NEVER put workgroupBarrier() after an early return or inside a divergent if.** All barriers must execute uniformly.
-4. MODULE-SCOPE 'let' FORBIDDEN: Module scope may use ONLY 'const' or 'var<workgroup>'. 'let' is only allowed inside functions.
+4. **W3C WGSL ADDRESS SPACES & SCOPES (CRITICAL):**
+   - var<workgroup> shared arrays MUST ONLY be declared at MODULE SCOPE outside fn main(...), before @compute. NEVER declare var<workgroup> inside fn main(...) or any function — function-scope workgroup vars cause compiler failure!
+   - Inside fn main, NEVER use const for expressions reading uniforms (params.*), builtins (gid.*, lid.*), or arrays. ALWAYS use let for local variables.
+   - In WGSL, 'let' is strictly forbidden at module scope (use 'const' for module constants).
+   - Never use C++ keywords like auto. Use let.
+   - All storage buffers are scalar array<f32>. Vectorization must assemble vec4<f32>(buf[idx], buf[idx+1], buf[idx+2], buf[idx+3]).
 5. WORKGROUP SIZE HARDWARE LIMIT: Maximum ${maxWorkgroupSize} invocations per workgroup (workgroup_size X*Y*Z <= ${maxWorkgroupSize}).
 6. GUARDRAILS: Do NOT repeat any syntax or intrinsic errors that caused compiler failures in dropped variants.
 7. NUMERICAL EQUIVALENCE: Must maintain exact IEEE-754 correctness within 1e-4 relative error.
@@ -403,7 +416,11 @@ Each thread row = gid.x processes 1 row. Do NOT use workgroupBarrier(). Use @wor
 Description: ${workload.description}
 Problem Dimensions: [${workload.problemDims.join(", ")}]
 Hardware Workgroup Limit: Maximum ${maxWorkgroupSize} invocations per workgroup (X*Y*Z <= ${maxWorkgroupSize}).
-WGSL Rule: In WGSL, 'let' is forbidden at module scope; use 'const' for module constants, or declare 'let' inside fn main. NEVER put workgroupBarrier() after an early return.
+WGSL Rules:
+- var<workgroup> shared arrays MUST be declared at MODULE SCOPE outside fn main (before @compute). NEVER declare var<workgroup> inside fn main!
+- Inside fn main, NEVER use const for runtime expressions (builtins, params, buffers). ALWAYS use let.
+- In WGSL, 'let' is forbidden at module scope; use 'const' for module constants.
+- NEVER put workgroupBarrier() after an early return or inside a divergent if.
 ${gen2Instruction}
 
 Fixed Harness WGSL Preamble (DO NOT REPEAT):
