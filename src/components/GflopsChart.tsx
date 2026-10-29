@@ -99,10 +99,17 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
                       {badge}
                     </span>
                     {isWinner && (
-                      <span className="flex items-center gap-1 rounded-full bg-[#171717] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#FFFFFF]">
-                        <Trophy className="h-3 w-3" />
-                        FASTEST WINNER
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1 rounded-full bg-[#171717] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#FFFFFF]">
+                          <Trophy className="h-3 w-3" />
+                          FASTEST WINNER
+                        </span>
+                        {item.speedupVsBaseline !== null && item.speedupVsBaseline < 1.0 && (
+                          <span className="rounded-full border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#C81E1E]">
+                            Slower than baseline
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                   {/* Right Tabular Readout (Guaranteed no truncation) */}
@@ -137,7 +144,7 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
                   ) : item.gflops ? (
                     <div
                       style={{ width: `${widthPct}%` }}
-                      className={`flex h-full items-center justify-between rounded-sm px-3 transition-all duration-500 ${
+                      className={`flex h-full items-center justify-between gap-2.5 rounded-sm px-3 transition-all duration-500 ${
                         isWinner
                           ? "bg-[#171717] text-[#FFFFFF] border-r-4 border-[#0070F3]"
                           : item.id === "baseline"
@@ -148,7 +155,7 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
                       <span className="font-mono text-[12.5px] font-semibold tracking-tight whitespace-nowrap tabular-nums">
                         {item.gflops.toFixed(1)} GFLOPS
                       </span>
-                      <span className="font-mono text-[11px] font-medium whitespace-nowrap opacity-90">
+                      <span className="ml-1.5 font-mono text-[11px] font-medium whitespace-nowrap opacity-90">
                         {item.id === "baseline"
                           ? "1.00x"
                           : `${item.speedupVsBaseline?.toFixed(2) || "1.00"}x`}
@@ -168,7 +175,7 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
 
       {/* Footer Subtext */}
       <div className="border-t border-[#EAEAEA] pt-3 font-mono text-xs text-[#888888]">
-        IEEE-754 FP32 Throughput • 3 Warmup + 9 Timed Dispatches • Dawn/wgpu Architecture
+        IEEE-754 FP32 Throughput • 5 Warmup + 9 Timed Dispatches • Dawn/wgpu Architecture
       </div>
     </div>
   );

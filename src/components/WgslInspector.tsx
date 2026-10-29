@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Copy, Check, Code2, Trophy, FileJson } from "lucide-react";
 import { VariantExecutionResult, WorkloadId } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
+import { copyToClipboard } from "@/lib/benchmarkUtils";
 
 interface WgslInspectorProps {
   variants: VariantExecutionResult[];
@@ -75,9 +76,9 @@ export const WgslInspector: React.FC<WgslInspectorProps> = ({
   };
 
   const handleCopyFastest = async () => {
-    const codeToCopy = winner?.fullWgslCode || activeItem?.fullWgslCode || "";
+    const codeToCopy = winner?.fullWgslCode || activeItem?.fullWgslCode || baseline?.fullWgslCode || "";
     if (codeToCopy) {
-      await navigator.clipboard.writeText(codeToCopy);
+      await copyToClipboard(codeToCopy);
       setCopiedFastest(true);
       setTimeout(() => setCopiedFastest(false), 2200);
     }
@@ -90,11 +91,11 @@ export const WgslInspector: React.FC<WgslInspectorProps> = ({
     } else if (viewMode === "json") {
       codeToCopy = JSON.stringify(getLockfilePayload(), null, 2);
     } else {
-      codeToCopy = activeItem?.fullWgslCode || "";
+      codeToCopy = activeItem?.fullWgslCode || baseline?.fullWgslCode || "";
     }
 
     if (codeToCopy) {
-      await navigator.clipboard.writeText(codeToCopy);
+      await copyToClipboard(codeToCopy);
       setCopiedCurrent(true);
       setTimeout(() => setCopiedCurrent(false), 2200);
     }
@@ -103,7 +104,24 @@ export const WgslInspector: React.FC<WgslInspectorProps> = ({
   const handleExportLockfile = async () => {
     setViewMode("json");
     const jsonStr = JSON.stringify(getLockfilePayload(), null, 2);
-    await navigator.clipboard.writeText(jsonStr);
+    await copyToClipboard(jsonStr);
+
+    try {
+      if (typeof window !== "undefined" && typeof document !== "undefined") {
+        const blob = new Blob([jsonStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `vajra-${workloadSpec.id}-lockfile.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (dlErr) {
+      console.warn("Direct file download error:", dlErr);
+    }
+
     setCopiedLockfile(true);
     setTimeout(() => setCopiedLockfile(false), 2200);
   };
@@ -196,7 +214,7 @@ export async function runVerified_${workloadSpec.id}(
   const codeLines = displayedContent.split("\n");
 
   return (
-    <div className="rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] overflow-hidden shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+    <div id="wgsl-inspector" className="rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] overflow-hidden shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
       {/* Top Header Row */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#EAEAEA] px-6 py-4">
         {/* Left: Title + 3 View Mode Pills */}
@@ -253,7 +271,7 @@ export async function runVerified_${workloadSpec.id}(
             {copiedLockfile ? (
               <>
                 <Check className="h-3.5 w-3.5 text-[#0A7143]" />
-                <span className="text-[#0A7143]">Copied Hardware Lockfile JSON!</span>
+                <span className="text-[#0A7143]">Lockfile JSON Downloaded &amp; Copied!</span>
               </>
             ) : (
               <>

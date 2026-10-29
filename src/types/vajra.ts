@@ -7,6 +7,7 @@ export type VariantStrategy =
   | "workgroup_tuning"
   | "shared_memory_tiling"
   | "vec4_vectorized"
+  | "4-way unroll"
   | "gen2_evolved";
 
 export function getStrategyBadgeLabel(
@@ -17,6 +18,9 @@ export function getStrategyBadgeLabel(
 ): string {
   if (strategy === "gen2_evolved") {
     return "Gen 2 Evolved Kernel";
+  }
+  if (strategy === "4-way unroll") {
+    return "4-Way Unroll";
   }
   if (
     strategy === "vec4_vectorized" &&
@@ -120,13 +124,18 @@ export interface VariantExecutionResult {
   isSimulatedFailure?: boolean;
 }
 
+export type VajraMode = "mock" | "nebius" | "nvidia";
+
 export interface GenerateRequest {
   workloadId: WorkloadId;
   mockMode?: boolean;
+  provider?: "nebius" | "nvidia";
   simulateCompileError?: boolean;
   generation?: 1 | 2;
   previousWinner?: VariantExecutionResult;
   failedVariants?: VariantExecutionResult[];
+  maxWorkgroupSize?: number;
+  forceStandardGen2?: boolean;
 }
 
 export interface GenerateResponse {
@@ -162,6 +171,7 @@ export interface HardwareProbeInfo {
   supportsTimestampQuery: boolean;
   timingMethod: TimingMethod;
   isMockOnlyFallback: boolean;
+  maxComputeInvocationsPerWorkgroup?: number;
 }
 
 export interface RecordedBenchmarkEntry {

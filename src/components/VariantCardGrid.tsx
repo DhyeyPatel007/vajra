@@ -8,13 +8,14 @@ import {
   Trophy,
   AlertCircle,
   ShieldCheck,
+  Check,
 } from "lucide-react";
 import {
   VariantExecutionResult,
   WorkloadId,
   getStrategyBadgeLabel,
 } from "@/types/vajra";
-import { computeGen2Uplift } from "@/lib/benchmarkUtils";
+import { computeGen2Uplift, copyToClipboard, getDeterministicErrorSummary } from "@/lib/benchmarkUtils";
 
 interface VariantCardGridProps {
   baseline: VariantExecutionResult | null;
@@ -22,6 +23,7 @@ interface VariantCardGridProps {
   onSelectVariantForInspect: (variant: VariantExecutionResult) => void;
   selectedInspectId?: string;
   workloadId?: WorkloadId;
+  isRunning?: boolean;
 }
 
 export const VariantCardGrid: React.FC<VariantCardGridProps> = ({
@@ -30,6 +32,7 @@ export const VariantCardGrid: React.FC<VariantCardGridProps> = ({
   onSelectVariantForInspect,
   selectedInspectId,
   workloadId,
+  isRunning = false,
 }) => {
   const [expandAll, setExpandAll] = useState(false);
   const hasVariantD = variants.some((v) => v.id === "variant-d");
@@ -113,6 +116,7 @@ export const VariantCardGrid: React.FC<VariantCardGridProps> = ({
               onInspect={() => card && onSelectVariantForInspect(card)}
               workloadId={workloadId}
               forceExpand={expandAll}
+              isRunning={isRunning}
             />
           );
         })}
@@ -130,6 +134,7 @@ interface VariantCardItemProps {
   onInspect: () => void;
   workloadId?: WorkloadId;
   forceExpand: boolean;
+  isRunning?: boolean;
 }
 
 const VariantCardItem: React.FC<VariantCardItemProps> = ({
@@ -141,22 +146,55 @@ const VariantCardItem: React.FC<VariantCardItemProps> = ({
   onInspect,
   workloadId,
   forceExpand,
+  isRunning = false,
 }) => {
   const [showDetails, setShowDetails] = useState(false);
+  const [copiedInspect, setCopiedInspect] = useState(false);
 
   if (!card) {
+    if (isRunning) {
+      return (
+        <div className="flex h-80 flex-col justify-between rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] p-5 opacity-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+          <div>
+            <span className="font-mono text-xs font-semibold text-[#888888]">
+              {indexLabel}
+            </span>
+            <h3 className="mt-2 text-base font-semibold text-[#171717]">
+              {defaultName}
+            </h3>
+          </div>
+          <div className="text-center font-mono text-xs text-[#888888]">
+            Waiting for dispatch...
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div className="flex h-80 flex-col justify-between rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] p-5 opacity-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+      <div className="flex h-80 flex-col justify-between rounded-lg border border-[#FFD6D6] bg-[#FFF0F0]/40 p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <div>
-          <span className="font-mono text-xs font-semibold text-[#888888]">
-            {indexLabel}
-          </span>
-          <h3 className="mt-2 text-base font-semibold text-[#171717]">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#666666]">
+              {indexLabel}
+            </span>
+            <span className="rounded-full border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#C81E1E]">
+              DROPPED
+            </span>
+          </div>
+          <h3 className="mt-2 text-[14px] font-semibold text-[#171717]">
             {defaultName}
           </h3>
+          <div className="mt-1">
+            <span className="inline-block rounded border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[11px] text-[#C81E1E]">
+              Not Dispatched
+            </span>
+          </div>
+          <p className="mt-2 text-[11.5px] font-mono text-[#C81E1E] leading-relaxed">
+            Dropped: Variant not dispatched or pipeline completed without return.
+          </p>
         </div>
-        <div className="text-center font-mono text-xs text-[#888888]">
-          Waiting for dispatch...
+        <div className="rounded border border-[#FFD6D6] bg-[#FFFFFF] p-2 text-center font-mono text-[11px] text-[#C81E1E]">
+          Quarantined in Failure Graveyard
         </div>
       </div>
     );
@@ -200,10 +238,17 @@ const VariantCardItem: React.FC<VariantCardItemProps> = ({
             {indexLabel}
           </span>
           {isWinner ? (
-            <span className="flex items-center gap-1 rounded-full bg-[#171717] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#FFFFFF]">
-              <Trophy className="h-3 w-3" />
-              FASTEST WINNER
-            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="flex items-center gap-1 rounded-full bg-[#171717] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#FFFFFF]">
+                <Trophy className="h-3 w-3" />
+                FASTEST WINNER
+              </span>
+              {card.speedupVsBaseline !== null && card.speedupVsBaseline < 1.0 && (
+                <span className="rounded-full border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#C81E1E]">
+                  Slower than baseline
+                </span>
+              )}
+            </div>
           ) : card.id === "baseline" ? (
             <span className="rounded-full border border-[#EAEAEA] bg-[#F2F2F2] px-2 py-0.5 font-mono text-[10.5px] text-[#666666]">
               BASELINE
@@ -274,7 +319,10 @@ const VariantCardItem: React.FC<VariantCardItemProps> = ({
           <div className="my-3.5 rounded-md border border-[#FFD6D6] bg-[#FFF0F0] p-3 font-mono text-xs text-[#C81E1E]">
             <div className="flex items-center gap-1.5 font-semibold">
               <AlertCircle className="h-4 w-4 shrink-0 text-[#E00000]" />
-              <span>{isCompileFailed ? "COMPILER REJECTION" : "VERIFY REJECTION"}</span>
+              <span>{isCompileFailed ? "COMPILER REJECTION" : "QUARANTINED — WRONG ANSWER"}</span>
+            </div>
+            <div className="mt-2 text-[11.5px] leading-snug font-sans text-[#C81E1E] font-medium">
+              {getDeterministicErrorSummary(card)}
             </div>
             {card.compileErrors.length > 0 && (
               <div className="mt-2 max-h-24 overflow-y-auto rounded bg-[#FFFFFF] p-2 text-[11px] text-[#C81E1E] border border-[#FFD6D6]">
@@ -344,15 +392,44 @@ const VariantCardItem: React.FC<VariantCardItemProps> = ({
 
       {/* Bottom Action: Inspect WGSL Button */}
       <button
-        onClick={onInspect}
+        onClick={async () => {
+          if (card?.fullWgslCode) {
+            await copyToClipboard(card.fullWgslCode);
+            setCopiedInspect(true);
+            setTimeout(() => setCopiedInspect(false), 2200);
+          }
+          onInspect();
+          if (typeof document !== "undefined") {
+            const el = document.getElementById("wgsl-inspector");
+            if (el) {
+              el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+          }
+        }}
         className={`flex w-full items-center justify-center gap-2 rounded-md py-2 font-mono text-[12px] font-medium transition-colors border cursor-pointer ${
-          isSelectedForInspect
+          copiedInspect
+            ? "border-[#059669] bg-[#ECFDF5] text-[#065F46]"
+            : isSelectedForInspect
             ? "border-[#171717] bg-[#171717] text-[#FFFFFF]"
             : "border-[#EAEAEA] bg-[#FFFFFF] text-[#171717] hover:border-[#999999] hover:bg-[#FAFAFA]"
         }`}
       >
-        <Code2 className="h-3.5 w-3.5" />
-        <span>Inspect WGSL</span>
+        {copiedInspect ? (
+          <>
+            <Check className="h-3.5 w-3.5 text-[#059669]" />
+            <span className="text-[#065F46] font-semibold">Copied &amp; Inspecting WGSL ↓</span>
+          </>
+        ) : isSelectedForInspect ? (
+          <>
+            <Code2 className="h-3.5 w-3.5" />
+            <span>Inspecting in Editor ↓</span>
+          </>
+        ) : (
+          <>
+            <Code2 className="h-3.5 w-3.5" />
+            <span>Inspect WGSL</span>
+          </>
+        )}
       </button>
     </div>
   );

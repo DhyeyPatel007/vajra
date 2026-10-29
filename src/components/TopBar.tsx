@@ -2,12 +2,14 @@
 
 import React from "react";
 import { Cpu, AlertTriangle, Radio } from "lucide-react";
-import { HardwareProbeInfo } from "@/types/vajra";
+import { HardwareProbeInfo, VajraMode } from "@/types/vajra";
 
 interface TopBarProps {
   probe: HardwareProbeInfo;
-  isMockMode: boolean;
-  onToggleMockMode: (mock: boolean) => void;
+  mode?: VajraMode;
+  onSelectMode?: (mode: VajraMode) => void;
+  isMockMode?: boolean;
+  onToggleMockMode?: (mock: boolean) => void;
   simulateCompileError: boolean;
   onToggleSimulateCompileError: (val: boolean) => void;
   previewNoWebGpu: boolean;
@@ -23,7 +25,9 @@ interface TopBarProps {
 
 export const TopBar: React.FC<TopBarProps> = ({
   probe,
-  isMockMode,
+  mode,
+  onSelectMode,
+  isMockMode = true,
   onToggleMockMode,
   simulateCompileError,
   onToggleSimulateCompileError,
@@ -32,6 +36,15 @@ export const TopBar: React.FC<TopBarProps> = ({
   usedFallbackModel,
 }) => {
   const isWebGpuActive = probe.supported && !previewNoWebGpu;
+  const activeMode: VajraMode = mode || (isMockMode ? "mock" : "nebius");
+
+  const handleSelectMode = (nextMode: VajraMode) => {
+    if (onSelectMode) {
+      onSelectMode(nextMode);
+    } else if (onToggleMockMode) {
+      onToggleMockMode(nextMode === "mock");
+    }
+  };
 
   return (
     <header className="w-full">
@@ -51,9 +64,24 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span className="rounded-md border border-[#EAEAEA] bg-[#FAFAFA] px-2 py-0.5 font-mono text-[11px] font-medium tracking-wide text-[#666666]">
                 WEBGPU AUTO-TUNER
               </span>
+              {activeMode === "mock" && (
+                <span className="rounded-md border border-[#EAEAEA] bg-[#FAFAFA] px-2 py-0.5 font-mono text-[11px] font-medium tracking-wide text-[#666666]">
+                  Mock Mode
+                </span>
+              )}
+              {activeMode === "nebius" && (
+                <span className="rounded-md border border-[#B8E8D0] bg-[#E6F6EE] px-2 py-0.5 font-mono text-[11px] font-semibold tracking-wide text-[#0A7143]">
+                  Live Token Factory
+                </span>
+              )}
+              {activeMode === "nvidia" && (
+                <span className="rounded-md border border-[#93C5FD] bg-[#EFF6FF] px-2 py-0.5 font-mono text-[11px] font-semibold tracking-wide text-[#1D4ED8]">
+                  Live NVIDIA
+                </span>
+              )}
               {usedFallbackModel && (
                 <span className="rounded-md border border-[#FDE68A] bg-[#FFFBEB] px-2 py-0.5 font-mono text-[10px] font-bold text-[#9A5B13]">
-                  ULTRA FALLBACK ACTIVE
+                  FALLBACK ACTIVE
                 </span>
               )}
             </div>
@@ -95,10 +123,11 @@ export const TopBar: React.FC<TopBarProps> = ({
             {/* Segmented Mode Switch */}
             <div className="flex items-center rounded-md border border-[#EAEAEA] bg-[#F2F2F2] p-0.5 font-mono">
               <button
-                onClick={() => onToggleMockMode(true)}
-                className={`rounded-[5px] px-3 py-1 text-[12px] font-medium transition-all ${
-                  isMockMode
-                    ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                type="button"
+                onClick={() => handleSelectMode("mock")}
+                className={`rounded-[5px] px-3 py-1 text-[12px] font-medium transition-all cursor-pointer ${
+                  activeMode === "mock"
+                    ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)] font-semibold"
                     : "text-[#666666] hover:text-[#171717]"
                 }`}
                 title="Runs verified local mock kernels with zero API calls"
@@ -106,16 +135,30 @@ export const TopBar: React.FC<TopBarProps> = ({
                 Mock Mode
               </button>
               <button
-                onClick={() => onToggleMockMode(false)}
-                className={`flex items-center gap-1.5 rounded-[5px] px-3 py-1 text-[12px] font-medium transition-all ${
-                  !isMockMode
-                    ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                type="button"
+                onClick={() => handleSelectMode("nebius")}
+                className={`flex items-center gap-1.5 rounded-[5px] px-3 py-1 text-[12px] font-medium transition-all cursor-pointer ${
+                  activeMode === "nebius"
+                    ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)] font-semibold"
                     : "text-[#666666] hover:text-[#171717]"
                 }`}
                 title="Queries NVIDIA Nemotron via Nebius Token Factory with automatic Ultra fallback"
               >
                 <Radio className="h-3 w-3" />
                 <span>Live Token Factory</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectMode("nvidia")}
+                className={`flex items-center gap-1.5 rounded-[5px] px-3 py-1 text-[12px] font-medium transition-all cursor-pointer ${
+                  activeMode === "nvidia"
+                    ? "bg-[#FFFFFF] text-[#171717] shadow-[0_1px_2px_rgba(0,0,0,0.06)] font-semibold"
+                    : "text-[#666666] hover:text-[#171717]"
+                }`}
+                title="Queries NVIDIA Nemotron via NVIDIA NIM API directly"
+              >
+                <Radio className="h-3 w-3" />
+                <span>Live NVIDIA</span>
               </button>
             </div>
 

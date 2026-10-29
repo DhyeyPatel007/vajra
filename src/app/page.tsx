@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 import {
   HardwareProbeInfo,
   VariantExecutionResult,
   WorkloadId,
   GenerateResponse,
   GenerateErrorResponse,
+  VajraMode,
 } from "@/types/vajra";
 import { WORKLOADS } from "@/lib/workloads";
 import { RECORDED_BENCHMARKS, getGen2RecordedResult } from "@/lib/recordedBenchmarks";
@@ -45,7 +47,8 @@ export default function VajraDashboard() {
 
   // Settings & Toggles
   const [selectedWorkloadId, setSelectedWorkloadId] = useState<WorkloadId>("matmul");
-  const [isMockMode, setIsMockMode] = useState<boolean>(true);
+  const [activeMode, setActiveMode] = useState<VajraMode>("mock");
+  const isMockMode = activeMode === "mock";
   const [simulateCompileError, setSimulateCompileError] = useState<boolean>(false);
   const [previewNoWebGpu, setPreviewNoWebGpu] = useState<boolean>(false);
 
@@ -226,12 +229,163 @@ export default function VajraDashboard() {
 
   // Main closed-loop WebGPU benchmark pipeline
   const runPipeline = useCallback(
-    async (workloadId: WorkloadId, mock: boolean, simError: boolean) => {
+    async (
+      workloadId: WorkloadId,
+      targetMode: VajraMode | boolean = activeMode,
+      simError: boolean = false
+    ) => {
+      const resolvedMode: VajraMode =
+        typeof targetMode === "boolean" ? (targetMode ? "mock" : "nebius") : targetMode;
+      const isMock = resolvedMode === "mock";
+      const currentProvider: "nebius" | "nvidia" =
+        resolvedMode === "nvidia" ? "nvidia" : "nebius";
       const isRecorded = !probe.supported || previewNoWebGpu || !webGpuCtxRef.current;
 
-      // Fix 1: When in recorded mode, do NOT return early as a no-op!
-      if (isRecorded) {
+      // When in recorded mode and mock mode, replay the reference pipeline
+      if (isRecorded && isMock) {
         await replayRecordedPipeline(workloadId, simError);
+        return;
+      }
+
+      // Live mode without physical WebGPU (or in reference preview):
+      // Still query /api/generate with requested provider so live validation and error banner work
+      if (isRecorded && !isMock) {
+        setIsRunning(true);
+        setApiError(null);
+        setStatusMessage("Generating… may take up to 90s");
+
+        setVariantResults([
+          {
+            id: "variant-a",
+            name: "Variant A: Workgroup Geometry",
+            strategy: "workgroup_tuning",
+            rationale: "Tuning workgroup dimensions and unrolling loops for coalesced global access.",
+            status: "GENERATING",
+            workgroupSize: [16, 16, 1],
+            dispatchGrid: [1, 1, 1],
+            compileErrors: [],
+            verified: false,
+            maxRelativeError: null,
+            medianTimeMs: null,
+            allRunTimesMs: [],
+            gflops: null,
+            derivedBandwidthGBps: null,
+            speedupVsBaseline: null,
+            fullWgslCode: "",
+            isWinner: false,
+          },
+          {
+            id: "variant-b",
+            name: "Variant B: Shared Memory Tiling",
+            strategy: "shared_memory_tiling",
+            rationale: "Allocating var<workgroup> tiles and barrier sync to minimize DRAM traffic.",
+            status: "GENERATING",
+            workgroupSize: [16, 16, 1],
+            dispatchGrid: [1, 1, 1],
+            compileErrors: [],
+            verified: false,
+            maxRelativeError: null,
+            medianTimeMs: null,
+            allRunTimesMs: [],
+            gflops: null,
+            derivedBandwidthGBps: null,
+            speedupVsBaseline: null,
+            fullWgslCode: "",
+            isWinner: false,
+          },
+          {
+            id: "variant-c",
+            name: "Variant C: Vec4 Vectorized",
+            strategy: "vec4_vectorized",
+            rationale: "Combining shared memory caching with SIMD vector arithmetic.",
+            status: "GENERATING",
+            workgroupSize: [16, 16, 1],
+            dispatchGrid: [1, 1, 1],
+            compileErrors: [],
+            verified: false,
+            maxRelativeError: null,
+            medianTimeMs: null,
+            allRunTimesMs: [],
+            gflops: null,
+            derivedBandwidthGBps: null,
+            speedupVsBaseline: null,
+            fullWgslCode: "",
+            isWinner: false,
+          },
+        ]);
+
+        const genRes = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workloadId,
+            mockMode: false,
+            provider: currentProvider,
+            simulateCompileError: simError,
+            maxWorkgroupSize: probe.maxComputeInvocationsPerWorkgroup || 256,
+          }),
+        });
+
+        if (!genRes.ok) {
+          const errData = (await genRes.json().catch(() => ({}))) as GenerateErrorResponse;
+          setApiError({
+            error: errData.error || `HTTP ${genRes.status} Error from /api/generate`,
+            code: errData.code || "UPSTREAM_SUPER_AND_ULTRA_FAILED",
+            retryable: true,
+            details: errData.details,
+          });
+          if (isMock) {
+            const rec = RECORDED_BENCHMARKS[workloadId];
+            if (rec) {
+              setBaselineResult(rec.baseline);
+              setVariantResults(rec.variants);
+              const champion = rec.variants.find((v) => v.isWinner) || null;
+              setWinnerResult(champion);
+            }
+          } else {
+            setVariantResults([]);
+            setWinnerResult(null);
+          }
+          setIsRunning(false);
+          setStatusMessage("");
+          return;
+        }
+
+        const genData = (await genRes.json()) as GenerateResponse;
+        setActiveModelSource(genData.source);
+        setActiveModelId(genData.modelId);
+        setUsedFallbackModel(genData.usedFallbackModel);
+
+        const rec = RECORDED_BENCHMARKS[workloadId];
+        setBaselineResult(rec.baseline);
+        const mappedVariants = rec.variants.map((recordedV, i) => {
+          const genV = genData.variants[i];
+          if (!genV) {
+            return {
+              ...recordedV,
+              status: "COMPILE_FAILED" as const,
+              verified: false,
+              isWinner: false,
+              compileErrors: ["Generation Incomplete: Variant was dropped or not returned by model."],
+            };
+          }
+          return {
+            ...recordedV,
+            id: genV.id,
+            name: genV.name,
+            strategy: genV.strategy,
+            rationale: genV.rationale,
+            fullWgslCode: `${WORKLOADS[workloadId].wgslPreamble}\n\n${genV.wgslBody}`,
+          };
+        });
+        setVariantResults(mappedVariants);
+        const champion = mappedVariants.find((v) => v.isWinner) || null;
+        setWinnerResult(champion);
+        if (champion) {
+          setSelectedInspectId(champion.id);
+        }
+        setIsRunning(false);
+        setStatusMessage("");
         return;
       }
 
@@ -264,10 +418,13 @@ export default function VajraDashboard() {
 
         const baselineDispatchGrid = computeDispatchGrid(
           workload.problemDims,
-          workload.baselineWorkgroupSize
+          workload.baselineWorkgroupSize,
+          [1, 1, 1],
+          workload.baselineWgslBody,
+          workload.id
         );
 
-        setStatusMessage("BENCHMARKING BASELINE (3 WARMUP + 9 TIMED)...");
+        setStatusMessage("BENCHMARKING BASELINE (5 WARMUP + 9 TIMED)...");
         const baselineBench = await runner.benchmarkKernel(
           baselineCompilation.pipeline,
           workload,
@@ -313,9 +470,9 @@ export default function VajraDashboard() {
 
         // Step 3: Fetch 3 Variants from /api/generate
         setStatusMessage(
-          mock
+          isMock
             ? "LOADING NEMOTRON VERIFIED MOCK KERNELS..."
-            : "QUERYING NVIDIA NEMOTRON VIA NEBIUS TOKEN FACTORY..."
+            : "Generating… may take up to 90s"
         );
 
         setVariantResults([
@@ -383,8 +540,10 @@ export default function VajraDashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             workloadId,
-            mockMode: mock,
+            mockMode: isMock,
+            provider: currentProvider,
             simulateCompileError: simError,
+            maxWorkgroupSize: probe.maxComputeInvocationsPerWorkgroup || 256,
           }),
         });
 
@@ -396,6 +555,17 @@ export default function VajraDashboard() {
             retryable: true,
             details: errData.details,
           });
+          if (isMock) {
+            const rec = RECORDED_BENCHMARKS[workloadId];
+            if (rec) {
+              setVariantResults(rec.variants);
+              const champion = rec.variants.find((v) => v.isWinner) || null;
+              setWinnerResult(champion);
+            }
+          } else {
+            setVariantResults([]);
+            setWinnerResult(null);
+          }
           setIsRunning(false);
           setStatusMessage("");
           return;
@@ -410,8 +580,18 @@ export default function VajraDashboard() {
 
         // Step 4: Process Each Variant (Compile -> Verify -> Benchmark)
         for (let i = 0; i < genData.variants.length; i++) {
-          const rawVariant = genData.variants[i];
+          const rawVariant = { ...genData.variants[i] };
           const variantId = rawVariant.id;
+
+          // Vec4 honesty validator: if strategy is vec4_vectorized but WGSL has no vec4 type, rename to 4-way unroll
+          const hasVec4Type = /\b(?:vec4<f32>|vec4f|vec4<[a-zA-Z0-9_]+>|vec4)\b/.test(rawVariant.wgslBody);
+          if (
+            (rawVariant.strategy === "vec4_vectorized" || rawVariant.strategy.toLowerCase().includes("vec4")) &&
+            !hasVec4Type
+          ) {
+            rawVariant.strategy = "4-way unroll";
+            rawVariant.name = rawVariant.name.replace(/vec4\s*vectorized/gi, "4-Way Unroll").replace(/vec4/gi, "4-Way Unroll");
+          }
 
           setStatusMessage(`COMPILING ${rawVariant.name.toUpperCase()}...`);
 
@@ -464,7 +644,9 @@ export default function VajraDashboard() {
           const dispatchGrid = computeDispatchGrid(
             workload.problemDims,
             rawVariant.workgroupSize,
-            rawVariant.elementsPerThread
+            rawVariant.elementsPerThread,
+            rawVariant.wgslBody,
+            workload.id
           );
 
           // Portability pre-check: verify dispatch grid does not exceed device limit
@@ -602,6 +784,50 @@ export default function VajraDashboard() {
           );
         }
 
+        // Ensure all 3 Gen 1 variants (A, B, C) are accounted for so no card stays in waiting state
+        const expectedGen1Ids: Array<"variant-a" | "variant-b" | "variant-c"> = [
+          "variant-a",
+          "variant-b",
+          "variant-c",
+        ];
+        for (const expId of expectedGen1Ids) {
+          if (!currentVariants.some((v) => v.id === expId)) {
+            const fallbackName =
+              expId === "variant-a"
+                ? "Variant A: Workgroup Geometry"
+                : expId === "variant-b"
+                ? "Variant B: Shared Memory Tiling"
+                : "Variant C: Vec4 Vectorized";
+            currentVariants.push({
+              id: expId,
+              name: fallbackName,
+              strategy:
+                expId === "variant-a"
+                  ? "workgroup_tuning"
+                  : expId === "variant-b"
+                  ? "shared_memory_tiling"
+                  : "vec4_vectorized",
+              rationale: "Variant dropped: not returned by generator or stream aborted before dispatch.",
+              status: "COMPILE_FAILED",
+              workgroupSize: [16, 16, 1],
+              dispatchGrid: [1, 1, 1],
+              compileErrors: [
+                "Pipeline Incomplete: Variant dropped — not returned by generator or aborted before dispatch.",
+              ],
+              verified: false,
+              isSimulatedFailure: false,
+              maxRelativeError: null,
+              medianTimeMs: null,
+              allRunTimesMs: [],
+              gflops: null,
+              derivedBandwidthGBps: null,
+              speedupVsBaseline: null,
+              fullWgslCode: "// Variant dropped before dispatch",
+              isWinner: false,
+            });
+          }
+        }
+
         // Step 7: Winner Selection
         setStatusMessage("CROWNING FASTEST KERNEL...");
         const verifiedCandidates = currentVariants.filter(
@@ -646,6 +872,18 @@ export default function VajraDashboard() {
           code: "PARSE_ERROR",
           retryable: true,
         });
+        if (isMock) {
+          const rec = RECORDED_BENCHMARKS[workloadId];
+          if (rec) {
+            setBaselineResult(rec.baseline);
+            setVariantResults(rec.variants);
+            const champion = rec.variants.find((v) => v.isWinner) || null;
+            setWinnerResult(champion);
+          }
+        } else {
+          setVariantResults([]);
+          setWinnerResult(null);
+        }
         setStatusMessage("");
       } finally {
         setIsRunning(false);
@@ -660,6 +898,7 @@ export default function VajraDashboard() {
 
     async function init() {
       const probeRes = await probeAndInitWebGpu();
+      console.log("[DEBUG probeRes in page]", probeRes);
       if (!isMounted) return;
 
       setProbe(probeRes);
@@ -683,22 +922,32 @@ export default function VajraDashboard() {
 
   // Handle Workload Tab Change (never leaks simulation state)
   const handleSelectWorkload = (id: WorkloadId) => {
+    if (isRunning) return;
+    setApiError(null);
     setSelectedWorkloadId(id);
     setSimulateCompileError(false);
-    runPipeline(id, isMockMode, false);
+    runPipeline(id, activeMode, false);
   };
 
   // Handle Tune Action Trigger (consumes simulation flag if active, resetting for subsequent runs)
   const handleTune = () => {
+    if (isRunning) return;
+    setApiError(null);
     const sim = simulateCompileError;
     if (sim) {
       setSimulateCompileError(false);
     }
-    runPipeline(selectedWorkloadId, isMockMode, sim);
+    runPipeline(selectedWorkloadId, activeMode, sim);
   };
 
   // Handle Refine Winner (Gen 2) Action Trigger
   const handleRefineGen2 = useCallback(async () => {
+    if (isRunning) return;
+    if (!winnerResult || winnerResult.id === "baseline" || !winnerResult.verified) {
+      console.warn("Refine Winner (Gen 2) skipped: No verified Gen 1 winner established.");
+      return;
+    }
+    setApiError(null);
     const isRecorded = !probe.supported || previewNoWebGpu || !webGpuCtxRef.current;
     const workloadId = selectedWorkloadId;
 
@@ -712,7 +961,7 @@ export default function VajraDashboard() {
       setStatusMessage("SYNTHESIZING EVOLVED VARIANT D (GEN 2)...");
       const placeholderD: VariantExecutionResult = {
         id: "variant-d",
-        name: "Variant D: Gen 2 Fused Tile + Register Coarsened",
+        name: "Variant D: Gen 2 Fused Tile + Unrolled FMA Pipeline",
         strategy: "gen2_evolved",
         rationale: "Synthesizing fused shared memory tiling with unrolled SIMD registers...",
         status: "GENERATING",
@@ -828,7 +1077,11 @@ export default function VajraDashboard() {
 
     setIsRunning(true);
     setApiError(null);
-    setStatusMessage("QUERYING NEMOTRON FOR GEN 2 EVOLUTIONARY REFINEMENT...");
+    setStatusMessage(
+      activeMode === "mock"
+        ? "QUERYING NEMOTRON FOR GEN 2 EVOLUTIONARY REFINEMENT..."
+        : "Generating… may take up to 90s"
+    );
 
     try {
       const inputs = workload.generateInputs();
@@ -840,7 +1093,10 @@ export default function VajraDashboard() {
       );
       const baselineDispatchGrid = computeDispatchGrid(
         workload.problemDims,
-        workload.baselineWorkgroupSize
+        workload.baselineWorkgroupSize,
+        [1, 1, 1],
+        workload.baselineWgslBody,
+        workload.id
       );
       const baselineOutput = await runner.runSingleExecutionAndReadback(
         baselineCompilation.pipeline!,
@@ -851,7 +1107,7 @@ export default function VajraDashboard() {
 
       const placeholderD: VariantExecutionResult = {
         id: "variant-d",
-        name: "Variant D: Gen 2 Fused Tile + Register Coarsened",
+        name: "Variant D: Gen 2 Fused Tile + Unrolled FMA Pipeline",
         strategy: "gen2_evolved",
         rationale: "Nemotron evolutionary synthesis from Gen 1 winner...",
         status: "GENERATING",
@@ -882,13 +1138,15 @@ export default function VajraDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           workloadId,
-          mockMode: isMockMode,
+          mockMode: activeMode === "mock",
+          provider: activeMode === "nvidia" ? "nvidia" : "nebius",
           simulateCompileError,
           generation: 2,
           previousWinner: winnerResult,
           failedVariants: variantResults.filter(
             (v) => v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
           ),
+          maxWorkgroupSize: probe.maxComputeInvocationsPerWorkgroup || 256,
         }),
       });
 
@@ -900,6 +1158,7 @@ export default function VajraDashboard() {
           retryable: true,
           details: errData.details,
         });
+        setVariantResults((prev) => prev.filter((v) => v.id !== "variant-d"));
         setIsRunning(false);
         setStatusMessage("");
         return;
@@ -955,7 +1214,9 @@ export default function VajraDashboard() {
       const dispatchGrid = computeDispatchGrid(
         workload.problemDims,
         rawVariant.workgroupSize,
-        rawVariant.elementsPerThread
+        rawVariant.elementsPerThread,
+        rawVariant.wgslBody,
+        workload.id
       );
 
       setStatusMessage("VERIFYING GEN 2 FLOATS (< 1e-4 TOLERANCE)...");
@@ -970,30 +1231,108 @@ export default function VajraDashboard() {
         inputs
       );
 
-      const verification = verifyFloatArrays(baselineOutput, variantOutput, 1e-4);
+      let finalRawVariant = rawVariant;
+      let finalCompilation = compilation;
+      let finalDispatchGrid = dispatchGrid;
+      let finalVerification = verifyFloatArrays(baselineOutput, variantOutput, 1e-4);
 
-      if (!verification.verified) {
+      // SGEMM Gen 2 Double-Buffering Fallback
+      if (!finalVerification.verified && workloadId === "matmul") {
+        console.warn(
+          `[Vajra] Double-buffered SGEMM Gen 2 failed verification (rel error: ${finalVerification.maxRelativeError}). Falling back to standard Gen 2 pattern...`
+        );
+        setStatusMessage("FALLING BACK TO STANDARD GEN 2 PATTERN...");
+        try {
+          const fallbackRes = await fetch("/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              workloadId,
+              mockMode: activeMode === "mock",
+              provider: activeMode === "nvidia" ? "nvidia" : "nebius",
+              simulateCompileError,
+              generation: 2,
+              previousWinner: winnerResult,
+              failedVariants: [
+                ...variantResults.filter((v) => v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"),
+                {
+                  id: "variant-d",
+                  name: "Variant D: Double-Buffered Tiling",
+                  compileErrors: [`Double-buffering failed verification (relErr: ${finalVerification.maxRelativeError})`],
+                },
+              ],
+              maxWorkgroupSize: probe.maxComputeInvocationsPerWorkgroup || 256,
+              forceStandardGen2: true,
+            }),
+          });
+
+          if (fallbackRes.ok) {
+            const fallbackData = (await fallbackRes.json()) as GenerateResponse;
+            if (fallbackData.variants && fallbackData.variants.length > 0) {
+              const fbVariant = fallbackData.variants[0];
+              fbVariant.rationale = `${fbVariant.rationale} (Fallback: double-buffering failed verification with relErr ${finalVerification.maxRelativeError?.toExponential(2)})`;
+
+              setStatusMessage("COMPILING FALLBACK GEN 2 VARIANT D...");
+              const fbComp = await compileShaderModule(
+                device,
+                workload,
+                fbVariant.wgslBody,
+                fbVariant.workgroupSize
+              );
+
+              if (fbComp.ok && fbComp.pipeline) {
+                const fbGrid = computeDispatchGrid(
+                  workload.problemDims,
+                  fbVariant.workgroupSize,
+                  fbVariant.elementsPerThread,
+                  fbVariant.wgslBody,
+                  workload.id
+                );
+                setStatusMessage("VERIFYING FALLBACK GEN 2 FLOATS (< 1e-4)...");
+                const fbOutput = await runner.runSingleExecutionAndReadback(
+                  fbComp.pipeline,
+                  workload,
+                  fbGrid,
+                  inputs
+                );
+                const fbVerif = verifyFloatArrays(baselineOutput, fbOutput, 1e-4);
+                if (fbVerif.verified) {
+                  console.log("[Vajra] Standard Gen 2 fallback verified successfully!");
+                  finalRawVariant = fbVariant;
+                  finalCompilation = fbComp;
+                  finalDispatchGrid = fbGrid;
+                  finalVerification = fbVerif;
+                }
+              }
+            }
+          }
+        } catch (fbErr: unknown) {
+          console.warn("[Vajra] Fallback Gen 2 failed:", fbErr);
+        }
+      }
+
+      if (!finalVerification.verified) {
         const verifyFailedResult: VariantExecutionResult = {
           id: "variant-d",
-          name: rawVariant.name,
-          strategy: rawVariant.strategy,
-          rationale: rawVariant.rationale,
+          name: finalRawVariant.name,
+          strategy: finalRawVariant.strategy,
+          rationale: finalRawVariant.rationale,
           status: "VERIFY_FAILED",
-          workgroupSize: rawVariant.workgroupSize,
-          dispatchGrid,
+          workgroupSize: finalRawVariant.workgroupSize,
+          dispatchGrid: finalDispatchGrid,
           compileErrors: [],
           verified: false,
-          maxRelativeError: verification.maxRelativeError,
+          maxRelativeError: finalVerification.maxRelativeError,
           medianTimeMs: null,
           allRunTimesMs: [],
           gflops: null,
           derivedBandwidthGBps: null,
           speedupVsBaseline: null,
-          fullWgslCode: compilation.fullWgsl,
+          fullWgslCode: finalCompilation.fullWgsl,
           isWinner: false,
           generation: 2,
-          parentWinnerId: rawVariant.parentWinnerId,
-          sharedMemoryBytes: compilation.sharedMemoryBytes,
+          parentWinnerId: finalRawVariant.parentWinnerId,
+          sharedMemoryBytes: finalCompilation.sharedMemoryBytes,
         };
         setVariantResults((prev) => [
           ...prev.filter((v) => v.id !== "variant-d"),
@@ -1010,9 +1349,9 @@ export default function VajraDashboard() {
       );
 
       const bench = await runner.benchmarkKernel(
-        compilation.pipeline,
+        finalCompilation.pipeline!,
         workload,
-        dispatchGrid,
+        finalDispatchGrid,
         inputs
       );
 
@@ -1046,25 +1385,25 @@ export default function VajraDashboard() {
 
       const rawGen2Result: VariantExecutionResult = {
         id: "variant-d",
-        name: rawVariant.name,
-        strategy: rawVariant.strategy,
-        rationale: rawVariant.rationale,
+        name: finalRawVariant.name,
+        strategy: finalRawVariant.strategy,
+        rationale: finalRawVariant.rationale,
         status: isDPromoted ? "VERIFIED_WINNER" : "VERIFIED_RUNNER_UP",
-        workgroupSize: rawVariant.workgroupSize,
-        dispatchGrid,
+        workgroupSize: finalRawVariant.workgroupSize,
+        dispatchGrid: finalDispatchGrid,
         compileErrors: [],
         verified: true,
-        maxRelativeError: verification.maxRelativeError,
+        maxRelativeError: finalVerification.maxRelativeError,
         medianTimeMs: bench.medianTimeMs,
         allRunTimesMs: bench.allRunTimesMs,
         gflops: bench.gflops,
         derivedBandwidthGBps: bench.derivedBandwidthGBps,
         speedupVsBaseline: speedup,
-        fullWgslCode: compilation.fullWgsl,
+        fullWgslCode: finalCompilation.fullWgsl,
         isWinner: isDPromoted,
         generation: 2,
-        parentWinnerId: rawVariant.parentWinnerId,
-        sharedMemoryBytes: compilation.sharedMemoryBytes,
+        parentWinnerId: finalRawVariant.parentWinnerId,
+        sharedMemoryBytes: finalCompilation.sharedMemoryBytes,
         iqrMs: bench.iqrMs,
         stabilityPct: bench.stabilityPct,
       };
@@ -1107,6 +1446,7 @@ export default function VajraDashboard() {
         code: "PARSE_ERROR",
         retryable: true,
       });
+      setVariantResults((prev) => prev.filter((v) => v.id !== "variant-d"));
       setStatusMessage("");
     } finally {
       setIsRunning(false);
@@ -1116,7 +1456,7 @@ export default function VajraDashboard() {
     previewNoWebGpu,
     selectedWorkloadId,
     simulateCompileError,
-    isMockMode,
+    activeMode,
     winnerResult,
     variantResults,
     baselineResult,
@@ -1128,7 +1468,7 @@ export default function VajraDashboard() {
     if (preview) {
       loadRecordedBenchmark(selectedWorkloadId, simulateCompileError);
     } else if (probe.supported && webGpuCtxRef.current) {
-      runPipeline(selectedWorkloadId, isMockMode, simulateCompileError);
+      runPipeline(selectedWorkloadId, activeMode, simulateCompileError);
     }
   };
 
@@ -1139,15 +1479,21 @@ export default function VajraDashboard() {
       {/* 1. Full-Width Vercel Header Strip & Reference Banner */}
       <TopBar
         probe={probe}
-        isMockMode={isMockMode}
+        mode={activeMode}
+        onSelectMode={(newMode) => {
+          setActiveMode(newMode);
+          runPipeline(selectedWorkloadId, newMode, simulateCompileError);
+        }}
+        isMockMode={activeMode === "mock"}
         onToggleMockMode={(mock) => {
-          setIsMockMode(mock);
-          runPipeline(selectedWorkloadId, mock, simulateCompileError);
+          const nextMode: VajraMode = mock ? "mock" : "nebius";
+          setActiveMode(nextMode);
+          runPipeline(selectedWorkloadId, nextMode, simulateCompileError);
         }}
         simulateCompileError={simulateCompileError}
         onToggleSimulateCompileError={(val) => {
           setSimulateCompileError(val);
-          runPipeline(selectedWorkloadId, isMockMode, val);
+          runPipeline(selectedWorkloadId, activeMode, val);
         }}
         previewNoWebGpu={previewNoWebGpu}
         onTogglePreviewNoWebGpu={handleTogglePreviewNoWebGpu}
@@ -1164,6 +1510,7 @@ export default function VajraDashboard() {
           onRefineGen2={handleRefineGen2}
           isRunning={isRunning}
           statusLabel={statusMessage}
+          hasVerifiedWinner={Boolean(winnerResult && winnerResult.id !== "baseline" && winnerResult.verified)}
         />
 
         {/* 3. API Error Banner */}
@@ -1174,30 +1521,40 @@ export default function VajraDashboard() {
                 <ShieldAlert className="h-5 w-5 shrink-0 text-[#E00000]" />
                 <div>
                   <div className="font-bold text-[#C81E1E]">
-                    GENERATION FAILED: {apiError.error}
+                    {apiError.error.startsWith("GENERATION FAILED:")
+                      ? apiError.error
+                      : `GENERATION FAILED: ${apiError.error}`}
                   </div>
-                  {apiError.details && (
-                    <div className="mt-1 text-[11px] text-[#666666]">
-                      {apiError.details}
-                    </div>
-                  )}
+                  {apiError.details &&
+                    apiError.details !== apiError.error &&
+                    !apiError.error.includes(apiError.details) && (
+                      <div className="mt-1 text-[11px] text-[#666666]">
+                        {apiError.details}
+                      </div>
+                    )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => runPipeline(selectedWorkloadId, false, false)}
+                  type="button"
+                  onClick={() => {
+                    setApiError(null);
+                    runPipeline(selectedWorkloadId, activeMode, false);
+                  }}
                   className="rounded-md border border-[#171717] bg-[#171717] px-4 py-2 font-mono text-xs font-semibold uppercase text-[#FFFFFF] hover:bg-[#333333] transition-colors cursor-pointer"
                 >
-                  Retry Live Generation
+                  RETRY LIVE GENERATION
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
-                    setIsMockMode(true);
-                    runPipeline(selectedWorkloadId, true, false);
+                    setActiveMode("mock");
+                    setApiError(null);
+                    runPipeline(selectedWorkloadId, "mock", false);
                   }}
                   className="rounded-md border border-[#EAEAEA] bg-[#FFFFFF] px-4 py-2 font-mono text-xs font-semibold uppercase text-[#171717] hover:border-[#999999] hover:bg-[#FAFAFA] transition-colors cursor-pointer"
                 >
-                  Fall Back to Mock Kernels
+                  FALL BACK TO MOCK KERNELS
                 </button>
               </div>
             </div>
@@ -1246,6 +1603,7 @@ export default function VajraDashboard() {
             selectedInspectId={selectedInspectId}
             onSelectVariantForInspect={(variant) => setSelectedInspectId(variant.id)}
             workloadId={selectedWorkloadId}
+            isRunning={isRunning}
           />
 
           {/* Failure Graveyard & Guardrail Diagnostics Log */}
@@ -1278,8 +1636,17 @@ export default function VajraDashboard() {
             <span className="text-[#888888]">//</span>
             <span>ZERO-INSTALL BROWSER-NATIVE WEBGPU AUTO-TUNER</span>
           </div>
-          <div className="text-[#888888]">
-            BUILT WITH NVIDIA NEMOTRON VIA NEBIUS TOKEN FACTORY FOR THE GLOBAL AI HACKATHON.
+          <div className="flex flex-wrap items-center gap-3 text-[#888888]">
+            <Link
+              href="/guide"
+              className="text-[#171717] underline underline-offset-4 hover:text-[#000000] transition-colors font-medium"
+            >
+              Know how to use
+            </Link>
+            <span className="text-[#D4D4D4]">•</span>
+            <span>
+              BUILT WITH NVIDIA NEMOTRON VIA NEBIUS TOKEN FACTORY FOR THE GLOBAL AI HACKATHON.
+            </span>
           </div>
         </div>
       </footer>

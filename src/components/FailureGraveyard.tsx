@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { AlertOctagon, CheckCircle2, ChevronDown, ChevronUp, ShieldAlert } from "lucide-react";
 import { VariantExecutionResult } from "@/types/vajra";
+import { getDeterministicErrorSummary } from "@/lib/benchmarkUtils";
 
 interface FailureGraveyardProps {
   variants: VariantExecutionResult[];
@@ -14,8 +15,30 @@ export const FailureGraveyard: React.FC<FailureGraveyardProps> = ({ variants }) 
   const failedVariants = variants.filter(
     (v) => v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
   );
+  const verifiedVariants = variants.filter(
+    (v) =>
+      v.verified &&
+      (v.status === "VERIFIED_WINNER" || v.status === "VERIFIED_RUNNER_UP")
+  );
 
-  if (failedVariants.length === 0) {
+  // 1. With 0 variants verified and 0 failed, show neutral "Not yet run"
+  if (verifiedVariants.length === 0 && failedVariants.length === 0) {
+    return (
+      <div className="flex items-center justify-between rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] px-5 py-3 text-[12px] font-mono text-[#666666] shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+        <div className="flex items-center gap-2 text-[#666666]">
+          <span className="font-medium">
+            Guardrail Status: Not yet run — awaiting kernel benchmark.
+          </span>
+        </div>
+        <span className="rounded-full border border-[#EAEAEA] bg-[#FAFAFA] px-2.5 py-0.5 text-[10px] font-bold text-[#666666]">
+          Not yet run
+        </span>
+      </div>
+    );
+  }
+
+  // 2. Only show 100% HEALTHY after at least one variant has actually been verified
+  if (failedVariants.length === 0 && verifiedVariants.length > 0) {
     return (
       <div className="flex items-center justify-between rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] px-5 py-3 text-[12px] font-mono text-[#666666] shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <div className="flex items-center gap-2 text-[#0A7143]">
@@ -104,8 +127,13 @@ export const FailureGraveyard: React.FC<FailureGraveyardProps> = ({ variants }) 
 
                 {/* Primary Error */}
                 <div className="mt-2 text-[11px] text-[#C81E1E]">
-                  <span className="font-bold">Compiler Fault: </span>
+                  <span className="font-bold">{isCompile ? "Compiler Fault: " : "Verification failed: "}</span>
                   <span>{primaryError}</span>
+                </div>
+
+                {/* Deterministic Error Summary */}
+                <div className="mt-2 rounded bg-[#FFF0F0] p-2 text-[11.5px] leading-snug font-sans text-[#C81E1E] font-medium border border-[#FFD6D6]">
+                  {getDeterministicErrorSummary(v)}
                 </div>
 
                 {/* Offending Code Snippet */}

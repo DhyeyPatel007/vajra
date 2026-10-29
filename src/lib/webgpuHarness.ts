@@ -16,6 +16,9 @@ export interface WebGpuContext {
 let cachedContext: WebGpuContext | null = null;
 
 export async function probeAndInitWebGpu(): Promise<HardwareProbeInfo & { context?: WebGpuContext }> {
+  if (cachedContext) {
+    return { ...cachedContext.probe, context: cachedContext };
+  }
   if (typeof window === "undefined" || !navigator.gpu) {
     return {
       supported: false,
@@ -76,6 +79,9 @@ export async function probeAndInitWebGpu(): Promise<HardwareProbeInfo & { contex
       timingMethod = "wall-clock-fallback";
     }
 
+    const maxComputeInvocationsPerWorkgroup =
+      device.limits?.maxComputeInvocationsPerWorkgroup ?? 256;
+
     const probe: HardwareProbeInfo = {
       supported: true,
       adapterDescription,
@@ -84,6 +90,7 @@ export async function probeAndInitWebGpu(): Promise<HardwareProbeInfo & { contex
       supportsTimestampQuery,
       timingMethod,
       isMockOnlyFallback: false,
+      maxComputeInvocationsPerWorkgroup,
     };
 
     cachedContext = { adapter, device, probe };
@@ -125,11 +132,31 @@ export function parseWorkgroupSize(wgslBody: string): [number, number, number] {
 export function computeDispatchGrid(
   problemDims: [number, number, number],
   workgroupSize: [number, number, number],
-  elementsPerThread: [number, number, number] = [1, 1, 1]
+  elementsPerThread: [number, number, number] = [1, 1, 1],
+  wgslBody?: string,
+  workloadId?: string
 ): [number, number, number] {
-  const gx = Math.ceil(problemDims[0] / ((workgroupSize?.[0] || 1) * (elementsPerThread?.[0] || 1)));
-  const gy = Math.ceil(problemDims[1] / ((workgroupSize?.[1] || 1) * (elementsPerThread?.[1] || 1)));
-  const gz = Math.ceil(problemDims[2] / ((workgroupSize?.[2] || 1) * (elementsPerThread?.[2] || 1)));
+  let eptX = elementsPerThread?.[0] || 1;
+  let eptY = elementsPerThread?.[1] || 1;
+  let eptZ = elementsPerThread?.[2] || 1;
+
+  // Softmax: 1 thread = 1 row (problemDims = [1024, 1, 1]).
+  // Vectorization is along inner columns, so dispatchGrid along X MUST be Math.ceil(1024 / workgroupSize[0]).
+  if (workloadId === "softmax" || (problemDims[0] === 1024 && problemDims[1] === 1 && problemDims[2] === 1)) {
+    // For softmax, always force effectiveElementsPerThread = [1, 1, 1] unless explicitly striding rows
+    if (!wgslBody || !/gid\.x\s*\*\s*4|global_invocation_id\.x\s*\*\s*4/.test(wgslBody)) {
+      eptX = 1;
+    }
+  } else if (eptX > 1) {
+    // For matmul, conv1d, and sobel: only allow elementsPerThread[0] > 1 if wgslBody explicitly strides gid.x
+    if (!wgslBody || !new RegExp(`gid\\.x\\s*\\*\\s*${eptX}|global_invocation_id\\.x\\s*\\*\\s*${eptX}`).test(wgslBody)) {
+      eptX = 1;
+    }
+  }
+
+  const gx = Math.ceil(problemDims[0] / ((workgroupSize?.[0] || 1) * eptX));
+  const gy = Math.ceil(problemDims[1] / ((workgroupSize?.[1] || 1) * eptY));
+  const gz = Math.ceil(problemDims[2] / ((workgroupSize?.[2] || 1) * eptZ));
   return [Math.max(1, gx), Math.max(1, gy), Math.max(1, gz)];
 }
 
@@ -184,13 +211,105 @@ export interface CompilationResult {
   sharedMemoryBytes?: number;
 }
 
+/**
+ * Deterministically repairs simple top-of-fn-main early return guards that appear
+ * before workgroupBarrier() calls in uniform control flow.
+ * Only runs if validateUniformBarriers(wgslBody) actually fails!
+ */
+export function repairEarlyReturnBeforeBarrier(wgslBody: string, workloadId?: string): string {
+  if (!wgslBody || typeof wgslBody !== "string" || !wgslBody.includes("workgroupBarrier()")) {
+    return wgslBody;
+  }
+
+  // Softmax: each thread processes 1 independent row. If a redundant workgroupBarrier()
+  // was emitted without cross-thread var<workgroup> sharing, strip it.
+  if (workloadId === "softmax" || (wgslBody.includes("exp(") && wgslBody.includes("sumExp"))) {
+    const hasWorkgroupSharedArray = /var<workgroup>\s+\w+\s*:\s*array</.test(wgslBody);
+    if (!hasWorkgroupSharedArray) {
+      return wgslBody.replace(/\bworkgroupBarrier\s*\(\s*\)\s*;/g, "");
+    }
+  }
+
+  // 1. FIRST check if validateUniformBarriers already passes!
+  // If it is already valid, do NOT touch anything!
+  if (validateUniformBarriers(wgslBody).valid) {
+    return wgslBody;
+  }
+
+  // 2. Only if invalid: find fn main
+  const mainMatch = /\bfn\s+main\s*\([^)]*\)[^{]*\{([\s\S]*)\}/.exec(wgslBody);
+  if (!mainMatch) {
+    return wgslBody;
+  }
+
+  const fnBody = mainMatch[1];
+  const firstBarrierIdx = fnBody.indexOf("workgroupBarrier()");
+  if (firstBarrierIdx === -1) {
+    return wgslBody;
+  }
+
+  const preBarrierBody = fnBody.substring(0, firstBarrierIdx);
+
+  // Look for a STANDALONE top-level early guard before the first barrier: if (cond) { return; }
+  // MUST NOT match blocks that perform assignments (e.g., imgOut[...] = 0.0; return;)
+  const guardRegex = /if\s*\(([^{};]+)\)\s*\{\s*return\s*;\s*\}/;
+  const guardMatch = guardRegex.exec(preBarrierBody);
+
+  if (guardMatch) {
+    const guardStatement = guardMatch[0];
+    const guardCond = guardMatch[1].trim();
+
+    // Replace `if (cond) { return; }` with `let _oob_guard: bool = (cond);`
+    let repairedBody = fnBody.replace(guardStatement, `let _oob_guard: bool = (${guardCond});`);
+
+    // Wrap the final global buffer write after the last workgroupBarrier() in `if (!_oob_guard) { ... }`
+    const outputBuffers = ["matrixC", "signalOut", "imgOut", "outputBuf"];
+    let wrapped = false;
+    for (const buf of outputBuffers) {
+      const bufWriteRegex = new RegExp(`(\\b${buf}\\s*\\[[^\\]]+\\]\\s*=[^;]+;)`, "g");
+      const lastBarrier = repairedBody.lastIndexOf("workgroupBarrier()");
+      let m: RegExpExecArray | null;
+      let lastMatch: { index: number; text: string } | null = null;
+      while ((m = bufWriteRegex.exec(repairedBody)) !== null) {
+        if (m.index > lastBarrier) {
+          lastMatch = { index: m.index, text: m[0] };
+        }
+      }
+      if (lastMatch) {
+        repairedBody =
+          repairedBody.substring(0, lastMatch.index) +
+          `if (!_oob_guard) { ${lastMatch.text} }` +
+          repairedBody.substring(lastMatch.index + lastMatch.text.length);
+        wrapped = true;
+        break;
+      }
+    }
+
+    if (!wrapped) {
+      const lastBarrier = repairedBody.lastIndexOf("workgroupBarrier()");
+      const barrierSemi = repairedBody.indexOf(";", lastBarrier);
+      if (barrierSemi !== -1) {
+        repairedBody =
+          repairedBody.slice(0, barrierSemi + 1) +
+          `\n  if (_oob_guard) { return; }` +
+          repairedBody.slice(barrierSemi + 1);
+      }
+    }
+
+    return wgslBody.replace(fnBody, repairedBody);
+  }
+
+  return wgslBody;
+}
+
 export async function compileShaderModule(
   device: GPUDevice,
   workload: WorkloadSpec,
   wgslBody: string,
   workgroupSize?: [number, number, number]
 ): Promise<CompilationResult> {
-  const fullWgsl = `${workload?.wgslPreamble || ""}\n\n${wgslBody || ""}`;
+  const repairedBody = repairEarlyReturnBeforeBarrier(wgslBody, workload?.id);
+  const fullWgsl = `${workload?.wgslPreamble || ""}\n\n${repairedBody || ""}`;
   const errors: string[] = [];
 
   let wgSize: [number, number, number] = [1, 1, 1];
@@ -247,6 +366,35 @@ export async function compileShaderModule(
     }
   }
 
+  // Pre-compile validation: reject empty WGSL body
+  if (!wgslBody || !wgslBody.trim()) {
+    errors.push("generator returned 2/3");
+    return { ok: false, errors, fullWgsl, sharedMemoryBytes: 0 };
+  }
+
+  // Pre-compile validation: reject module-scope 'let'
+  const checkLines = fullWgsl.split("\n");
+  let checkDepth = 0;
+  for (const line of checkLines) {
+    if (checkDepth === 0 && /^\s*let\s+[a-zA-Z_]/.test(line)) {
+      errors.push(
+        "Compilation Rejected: Module-scope 'let' is forbidden in WGSL. Module scope may use only 'const', 'let' only inside fn."
+      );
+      return { ok: false, errors, fullWgsl, sharedMemoryBytes };
+    }
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === "{") checkDepth++;
+      else if (line[i] === "}") checkDepth = Math.max(0, checkDepth - 1);
+    }
+  }
+
+  // Pre-compile validation: reject workgroupBarrier after divergent return in the same function
+  const barrierCheck = validateUniformBarriers(fullWgsl);
+  if (!barrierCheck.valid) {
+    errors.push(barrierCheck.error || "barrier after divergent return");
+    return { ok: false, errors, fullWgsl, sharedMemoryBytes };
+  }
+
   try {
     device.pushErrorScope("validation");
     const module = device.createShaderModule({
@@ -286,10 +434,66 @@ export async function compileShaderModule(
   }
 }
 
+/**
+ * Pre-compile validator for uniform workgroupBarrier calls.
+ * If a WGSL function body contains a 'return' statement before a 'workgroupBarrier()' call,
+ * it is rejected BEFORE GPU dispatch because workgroupBarrier must execute in uniform control flow.
+ */
+export function validateUniformBarriers(wgsl: string): { valid: boolean; error?: string } {
+  // Strip block and line comments to avoid false matches
+  const cleanCode = wgsl
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+
+  // Match function declarations: fn <name>(...) [-> <return_type>] {
+  const fnRegex = /\bfn\s+([a-zA-Z0-9_]+)\s*\([^)]*\)[^{]*\{/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = fnRegex.exec(cleanCode)) !== null) {
+    const bodyStart = match.index + match[0].length;
+    let depth = 1;
+    let i = bodyStart;
+    while (i < cleanCode.length && depth > 0) {
+      if (cleanCode[i] === "{") depth++;
+      else if (cleanCode[i] === "}") depth--;
+      i++;
+    }
+    const fnBody = cleanCode.substring(bodyStart, i - 1);
+
+    // Look for workgroupBarrier calls
+    const barrierRegex = /\bworkgroupBarrier\s*\(\s*\)/g;
+    let barrierMatch: RegExpExecArray | null;
+    const barrierIndices: number[] = [];
+    while ((barrierMatch = barrierRegex.exec(fnBody)) !== null) {
+      barrierIndices.push(barrierMatch.index);
+    }
+
+    if (barrierIndices.length > 0) {
+      // Find all returns in this function
+      const returnRegex = /\breturn\b/g;
+      let returnMatch: RegExpExecArray | null;
+      while ((returnMatch = returnRegex.exec(fnBody)) !== null) {
+        const returnIdx = returnMatch.index;
+        for (const bIdx of barrierIndices) {
+          if (returnIdx < bIdx) {
+            return {
+              valid: false,
+              error: "barrier after divergent return",
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 export interface VerificationResult {
   verified: boolean;
   maxRelativeError: number | null;
   outputArray?: Float32Array;
+  firstFailures?: Array<{ index: number; baseline: number; variant: number; relErr: number }>;
 }
 
 export function verifyFloatArrays(
@@ -298,27 +502,51 @@ export function verifyFloatArrays(
   tolerance: number = 1e-4
 ): VerificationResult {
   if (baseline.length !== variant.length) {
-    return { verified: false, maxRelativeError: Number.POSITIVE_INFINITY };
+    return { verified: false, maxRelativeError: Number.POSITIVE_INFINITY, firstFailures: [] };
   }
 
   let maxRelErr = 0;
+  const firstFailures: Array<{ index: number; baseline: number; variant: number; relErr: number }> = [];
+
   for (let i = 0; i < baseline.length; i++) {
     const b = baseline[i];
     const v = variant[i];
 
     if (Number.isNaN(v) || !Number.isFinite(v)) {
-      return { verified: false, maxRelativeError: Number.POSITIVE_INFINITY };
+      if (firstFailures.length < 3) {
+        firstFailures.push({ index: i, baseline: b, variant: v, relErr: Number.POSITIVE_INFINITY });
+      }
+      maxRelErr = Number.POSITIVE_INFINITY;
+      continue;
     }
 
     const relErr = Math.abs(v - b) / Math.max(Math.abs(b), 1e-6);
     if (relErr > maxRelErr) {
       maxRelErr = relErr;
     }
+    if (relErr >= tolerance && firstFailures.length < 3) {
+      firstFailures.push({ index: i, baseline: b, variant: v, relErr });
+    }
+  }
+
+  const verified = maxRelErr < tolerance && firstFailures.length === 0;
+
+  if (!verified && firstFailures.length > 0) {
+    console.warn(
+      `[Vajra Verification Failure] First failing outputs (first 3 only):\n` +
+        firstFailures
+          .map(
+            (f, idx) =>
+              `  #${idx + 1}: Index [${f.index}] -> Baseline = ${f.baseline}, Variant = ${f.variant} (relErr: ${f.relErr.toExponential(3)})`
+          )
+          .join("\n")
+    );
   }
 
   return {
-    verified: maxRelErr < tolerance,
+    verified,
     maxRelativeError: maxRelErr,
+    firstFailures,
   };
 }
 
@@ -425,7 +653,7 @@ export class WebGpuBenchmarkRunner {
     workload: WorkloadSpec,
     dispatchGrid: [number, number, number],
     inputs: { inputA: Float32Array; inputB?: Float32Array },
-    warmupCount: number = 3,
+    warmupCount: number = 5,
     timedCount: number = 9
   ): Promise<{
     medianTimeMs: number;

@@ -66,7 +66,7 @@ export function getGen2RecordedResult(
     case "conv1d":
       return {
         id: "variant-d",
-        name: "Variant D: Gen 2 Fused Tile + Register Coarsened",
+        name: "Variant D: Gen 2 Fused Tile + Unrolled FMA Pipeline",
         strategy: "gen2_evolved",
         rationale:
           "Evolutionary synthesis: cooperative shared signal halo and filter preloading with dual-accumulator vec4<f32> dot products.",

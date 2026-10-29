@@ -13,6 +13,7 @@ interface WorkloadSelectorProps {
   isRunning: boolean;
   statusLabel?: string;
   hasGen2Run?: boolean;
+  hasVerifiedWinner?: boolean;
 }
 
 export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
@@ -22,6 +23,7 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
   onRefineGen2,
   isRunning,
   statusLabel,
+  hasVerifiedWinner = false,
 }) => {
   const workloadIds: WorkloadId[] = ["matmul", "softmax", "conv1d", "sobel"];
   const activeSpec = WORKLOADS[selectedId] || WORKLOADS.matmul;
@@ -80,10 +82,23 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
         <div className="flex items-center justify-end gap-2.5 shrink-0">
           {/* Secondary CTA: Refine Winner (Gen 2) */}
           <button
-            onClick={onRefineGen2}
-            disabled={isRunning}
-            className={`rounded-md border border-[#0070F3] bg-[#FFFFFF] px-4 py-2.5 font-mono text-[13px] font-medium text-[#0070F3] whitespace-nowrap transition-colors hover:bg-[#F0F7FF] ${
-              isRunning ? "cursor-not-allowed opacity-50" : "cursor-pointer active:translate-y-0.5"
+            onClick={() => {
+              if (!isRunning && hasVerifiedWinner && onRefineGen2) {
+                onRefineGen2();
+              }
+            }}
+            disabled={isRunning || !hasVerifiedWinner}
+            title={
+              !hasVerifiedWinner
+                ? "Awaiting verified Gen 1 winner before refining"
+                : "Evolve winner with Gen 2 fused tile and loop unrolling"
+            }
+            className={`rounded-md border px-4 py-2.5 font-mono text-[13px] font-medium whitespace-nowrap transition-colors ${
+              !hasVerifiedWinner
+                ? "border-[#EAEAEA] bg-[#FAFAFA] text-[#888888] cursor-not-allowed opacity-60"
+                : isRunning
+                ? "border-[#0070F3] bg-[#FFFFFF] text-[#0070F3] cursor-not-allowed opacity-50"
+                : "border-[#0070F3] bg-[#FFFFFF] text-[#0070F3] hover:bg-[#F0F7FF] cursor-pointer active:translate-y-0.5"
             }`}
           >
             Refine Winner (Gen 2)
@@ -95,14 +110,14 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
             disabled={isRunning}
             className={`flex items-center justify-center gap-2 rounded-md px-5 py-2.5 font-mono text-[13px] font-medium whitespace-nowrap transition-colors border ${
               isRunning
-                ? "cursor-not-allowed bg-[#F2F2F2] text-[#999999] border-[#EAEAEA]"
+                ? "cursor-not-allowed bg-[#F2F2F2] text-[#999999] border-[#EAEAEA] pointer-events-none"
                 : "bg-[#171717] hover:bg-[#333333] active:bg-[#000000] text-[#FFFFFF] border-[#171717] cursor-pointer"
             }`}
           >
             {isRunning ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin text-[#999999]" />
-                <span>BENCHMARKING...</span>
+                <span>{statusLabel?.toLowerCase().includes("generating") ? "GENERATING..." : "BENCHMARKING..."}</span>
               </>
             ) : (
               <>

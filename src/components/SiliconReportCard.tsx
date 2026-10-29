@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import {
   Trophy,
   ShieldCheck,
+  ShieldAlert,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
@@ -37,6 +38,26 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
   workloadId,
 }) => {
   const [showDetails, setShowDetails] = useState(false);
+
+  const allVariantsQuarantined =
+    variants.length > 0 &&
+    variants.every(
+      (v) => v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
+    );
+
+  if (allVariantsQuarantined) {
+    return (
+      <div className="flex h-full flex-col justify-center rounded-lg border border-[#FFD6D6] bg-[#FFF0F0] p-6 text-center shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+        <ShieldAlert className="mx-auto h-8 w-8 text-[#E00000]" />
+        <h3 className="mt-3 font-semibold text-[#C81E1E]">
+          No verified kernel — all variants quarantined
+        </h3>
+        <p className="mt-1 font-mono text-xs text-[#666666]">
+          All candidate kernels failed compilation or exceeded 1e-4 verification tolerance. Guardrail prevented shipping an invalid kernel.
+        </p>
+      </div>
+    );
+  }
 
   if (!winner || winner.id === "baseline") {
     return (
@@ -97,9 +118,16 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
       {/* Top Header */}
       <div>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="rounded-full bg-[#171717] px-2.5 py-0.5 font-mono text-[11px] font-medium text-[#FFFFFF]">
-            FASTEST VERIFIED KERNEL
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span className="rounded-full bg-[#171717] px-2.5 py-0.5 font-mono text-[11px] font-medium text-[#FFFFFF]">
+              FASTEST VERIFIED KERNEL
+            </span>
+            {speedup < 1.0 && (
+              <span className="rounded-full border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#C81E1E]">
+                Slower than baseline
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <span className="rounded-full border border-[#CCE3FF] bg-[#F0F7FF] px-2.5 py-0.5 font-mono text-[11px] text-[#0070F3]">
               {strategyBadge}
