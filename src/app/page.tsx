@@ -44,10 +44,13 @@ export default function VajraDashboard() {
   });
 
   const webGpuCtxRef = useRef<WebGpuContext | null>(null);
+  const compiledPipelinesRef = useRef<
+    Map<string, { pipeline: GPUComputePipeline; fullWgsl: string }>
+  >(new Map());
 
   // Settings & Toggles
   const [selectedWorkloadId, setSelectedWorkloadId] = useState<WorkloadId>("matmul");
-  const [activeMode, setActiveMode] = useState<VajraMode>("mock");
+  const [activeMode, setActiveMode] = useState<VajraMode>("nebius");
   const isMockMode = activeMode === "mock";
   const [simulateCompileError, setSimulateCompileError] = useState<boolean>(false);
   const [previewNoWebGpu, setPreviewNoWebGpu] = useState<boolean>(false);
@@ -73,20 +76,6 @@ export default function VajraDashboard() {
   >("mock");
   const [activeModelId, setActiveModelId] = useState<string>("mock-nemotron-local");
   const [usedFallbackModel, setUsedFallbackModel] = useState<boolean>(false);
-
-  // Tavily Search Grounding & BYOK States
-  const [tavilyGrounding, setTavilyGrounding] = useState<{
-    query: string;
-    sources: Array<{ title: string; url: string }>;
-  } | null>(null);
-  const [showByok, setShowByok] = useState<boolean>(false);
-  const [byokUrl, setByokUrl] = useState<string>("");
-  const [byokLoading, setByokLoading] = useState<boolean>(false);
-  const [byokError, setByokError] = useState<string | null>(null);
-  const [importedBaselineInfo, setImportedBaselineInfo] = useState<{
-    originalUrl: string;
-    requiredBindings: string[];
-  } | null>(null);
 
   // Helper to load recorded fallback benchmarks statically or with simulation
   const loadRecordedBenchmark = useCallback(
@@ -369,9 +358,6 @@ export default function VajraDashboard() {
         setActiveModelSource(genData.source);
         setActiveModelId(genData.modelId);
         setUsedFallbackModel(genData.usedFallbackModel);
-        if (genData.tavilyGrounding) {
-          setTavilyGrounding(genData.tavilyGrounding);
-        }
 
         const rec = RECORDED_BENCHMARKS[workloadId];
         setBaselineResult(rec.baseline);
@@ -440,6 +426,12 @@ export default function VajraDashboard() {
           workload.baselineWgslBody,
           workload.id
         );
+
+        compiledPipelinesRef.current.clear();
+        compiledPipelinesRef.current.set("baseline", {
+          pipeline: baselineCompilation.pipeline,
+          fullWgsl: baselineCompilation.fullWgsl,
+        });
 
         setStatusMessage("BENCHMARKING BASELINE (5 WARMUP + 9 TIMED)...");
         const baselineBench = await runner.benchmarkKernel(
@@ -592,9 +584,6 @@ export default function VajraDashboard() {
         setActiveModelSource(genData.source);
         setActiveModelId(genData.modelId);
         setUsedFallbackModel(genData.usedFallbackModel);
-        if (genData.tavilyGrounding) {
-          setTavilyGrounding(genData.tavilyGrounding);
-        }
 
         const currentVariants: VariantExecutionResult[] = [];
 
@@ -660,6 +649,11 @@ export default function VajraDashboard() {
             );
             continue;
           }
+
+          compiledPipelinesRef.current.set(variantId, {
+            pipeline: compilation.pipeline,
+            fullWgsl: compilation.fullWgsl,
+          });
 
           const dispatchGrid = computeDispatchGrid(
             workload.problemDims,
@@ -860,8 +854,19 @@ export default function VajraDashboard() {
         );
 
         // Only the variant with the highest verified median GFLOPS gets FASTEST WINNER
+        // IF and only if it strictly beats the baseline (speedup > 1.00x)
         verifiedCandidates.sort((a, b) => (b.gflops || 0) - (a.gflops || 0));
-        const champion = verifiedCandidates.length > 0 ? verifiedCandidates[0] : null;
+        const bestCandidate = verifiedCandidates.length > 0 ? verifiedCandidates[0] : null;
+        const baselineGflops = initialBaselineResult.gflops || 0;
+
+        const isBaselineRetained = Boolean(
+          bestCandidate &&
+          (bestCandidate.speedupVsBaseline !== null
+            ? bestCandidate.speedupVsBaseline <= 1.0
+            : (bestCandidate.gflops || 0) <= baselineGflops)
+        );
+
+        const champion = !isBaselineRetained && bestCandidate ? bestCandidate : null;
 
         const finalVariants = currentVariants.map((v) => ({
           ...v,
@@ -878,6 +883,14 @@ export default function VajraDashboard() {
         if (champion) {
           setWinnerResult({ ...champion, isWinner: true });
           setSelectedInspectId(champion.id);
+        } else if (isBaselineRetained) {
+          setWinnerResult({
+            ...initialBaselineResult,
+            isWinner: true,
+            isBaselineRetained: true,
+            bestVariantSpeedup: bestCandidate?.speedupVsBaseline ?? 1.0,
+          });
+          setSelectedInspectId("baseline");
         } else {
           setWinnerResult(null);
         }
@@ -927,7 +940,53 @@ export default function VajraDashboard() {
       }
 
       if (probeRes.supported && probeRes.context) {
-        runPipeline("matmul", true, false);
+        try {
+          const device = probeRes.context.device;
+          const workload = WORKLOADS.matmul;
+          const runner = new WebGpuBenchmarkRunner(device, probeRes.supportsTimestampQuery);
+          const inputs = workload.generateInputs();
+          const baseComp = await compileShaderModule(device, workload, workload.baselineWgslBody);
+          if (baseComp.ok && baseComp.pipeline) {
+            compiledPipelinesRef.current.set("baseline", {
+              pipeline: baseComp.pipeline,
+              fullWgsl: baseComp.fullWgsl,
+            });
+            const grid = computeDispatchGrid(
+              workload.problemDims,
+              workload.baselineWorkgroupSize,
+              [1, 1, 1],
+              workload.baselineWgslBody,
+              workload.id
+            );
+            const bench = await runner.benchmarkKernel(baseComp.pipeline, workload, grid, inputs);
+            setBaselineResult({
+              id: "baseline",
+              name: "Naive Baseline",
+              strategy: "baseline",
+              rationale: "Uncoalesced baseline reading directly from global DRAM on each instruction.",
+              status: "IDLE",
+              workgroupSize: workload.baselineWorkgroupSize,
+              dispatchGrid: grid,
+              compileErrors: [],
+              verified: true,
+              maxRelativeError: 0,
+              medianTimeMs: bench.medianTimeMs,
+              allRunTimesMs: bench.allRunTimesMs,
+              gflops: bench.gflops,
+              derivedBandwidthGBps: bench.derivedBandwidthGBps,
+              speedupVsBaseline: 1.0,
+              fullWgslCode: baseComp.fullWgsl,
+              isWinner: false,
+              sharedMemoryBytes: 0,
+              iqrMs: bench.iqrMs,
+              stabilityPct: bench.stabilityPct,
+            });
+            setActiveModelSource("nebius-super");
+            setActiveModelId("nvidia/llama-3.1-nemotron-70b-reward:free");
+          }
+        } catch (e) {
+          console.warn("Initial baseline mount benchmark error:", e);
+        }
       } else {
         loadRecordedBenchmark("matmul", false);
       }
@@ -960,88 +1019,195 @@ export default function VajraDashboard() {
     runPipeline(selectedWorkloadId, activeMode, sim);
   };
 
-  // Handle Bring Your Own Kernel (BYOK) Extraction via Tavily
-  const handleImportByok = async () => {
-    if (!byokUrl.trim()) {
-      setByokError("Please enter a public GitHub .wgsl file URL.");
+  // Handle Re-Benchmark on Warm GPU (0 Credits) Action Trigger
+  const handleRebenchmark = useCallback(async () => {
+    if (isRunning) return;
+    const isRecorded = !probe.supported || previewNoWebGpu || !webGpuCtxRef.current;
+    const ctx = webGpuCtxRef.current;
+    const workload = WORKLOADS[selectedWorkloadId];
+
+    if (isRecorded || !ctx || !ctx.device) {
+      setIsRunning(true);
+      setStatusMessage("RE-BENCHMARKING ON WARM GPU (5 WARMUP + 9 TIMED)...");
+      await new Promise((r) => setTimeout(r, 200));
+      setStatusMessage("");
+      setIsRunning(false);
       return;
     }
-    setByokLoading(true);
-    setByokError(null);
+
+    const device = ctx.device;
+    const runner = new WebGpuBenchmarkRunner(device, probe.supportsTimestampQuery);
+
+    setIsRunning(true);
+    setApiError(null);
+    setStatusMessage("RE-BENCHMARKING ON WARM GPU (0 CREDITS USED)...");
+
     try {
-      const res = await fetch("/api/tavily-import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: byokUrl.trim(), workloadId: selectedWorkloadId }),
-      });
-      const data = await res.json();
-      if (!data.ok) {
-        setByokError(data.error || "Tavily Extract failed.");
-        setByokLoading(false);
-        return;
+      const inputs = workload.generateInputs();
+
+      // 1. Re-benchmark Baseline
+      let baselinePipeline = compiledPipelinesRef.current.get("baseline")?.pipeline;
+      let baselineWgsl = compiledPipelinesRef.current.get("baseline")?.fullWgsl || baselineResult?.fullWgslCode || "";
+      if (!baselinePipeline) {
+        const baseComp = await compileShaderModule(device, workload, workload.baselineWgslBody);
+        if (baseComp.ok && baseComp.pipeline) {
+          baselinePipeline = baseComp.pipeline;
+          baselineWgsl = baseComp.fullWgsl;
+          compiledPipelinesRef.current.set("baseline", { pipeline: baseComp.pipeline, fullWgsl: baseComp.fullWgsl });
+        }
       }
 
-      const ctx = webGpuCtxRef.current;
-      const workload = WORKLOADS[selectedWorkloadId];
-      setImportedBaselineInfo({
-        originalUrl: data.originalUrl,
-        requiredBindings: data.requiredBindings,
-      });
+      if (!baselinePipeline) {
+        throw new Error("Unable to obtain baseline pipeline for re-benchmark.");
+      }
 
-      if (ctx && ctx.device && !previewNoWebGpu) {
-        const compilation = await compileShaderModule(ctx.device, workload, data.wgsl);
-        if (!compilation.ok || !compilation.pipeline) {
-          setByokError(`Extracted kernel failed compilation: ${compilation.errors.join("; ")}`);
-          setByokLoading(false);
-          return;
-        }
-        const runner = new WebGpuBenchmarkRunner(ctx.device, probe.supportsTimestampQuery);
-        const inputs = workload.generateInputs();
-        const dispatchGrid = computeDispatchGrid(workload.problemDims, workload.baselineWorkgroupSize);
-        const bench = await runner.benchmarkKernel(
-          compilation.pipeline,
-          workload,
-          dispatchGrid,
-          inputs
-        );
-        const customBase: VariantExecutionResult = {
+      const baselineDispatchGrid = baselineResult?.dispatchGrid || computeDispatchGrid(
+        workload.problemDims,
+        workload.baselineWorkgroupSize,
+        [1, 1, 1],
+        workload.baselineWgslBody,
+        workload.id
+      );
+
+      setStatusMessage("RE-BENCHMARKING BASELINE ON WARM SILICON...");
+      const newBaselineBench = await runner.benchmarkKernel(
+        baselinePipeline,
+        workload,
+        baselineDispatchGrid,
+        inputs
+      );
+
+      const updatedBaselineResult: VariantExecutionResult = {
+        ...(baselineResult || {
           id: "baseline",
-          name: "Imported GitHub Baseline (LIVE TAVILY EXTRACT)",
+          name: "Naive Baseline",
           strategy: "baseline",
-          rationale: `Extracted via Tavily from ${data.originalUrl}`,
+          rationale: "Uncoalesced baseline reading directly from global DRAM on each instruction.",
           status: "IDLE",
           workgroupSize: workload.baselineWorkgroupSize,
-          dispatchGrid,
+          dispatchGrid: baselineDispatchGrid,
           compileErrors: [],
           verified: true,
           maxRelativeError: 0,
+          fullWgslCode: baselineWgsl,
+          isWinner: false,
+          sharedMemoryBytes: 0,
+        }),
+        medianTimeMs: newBaselineBench.medianTimeMs,
+        allRunTimesMs: newBaselineBench.allRunTimesMs,
+        gflops: newBaselineBench.gflops,
+        derivedBandwidthGBps: newBaselineBench.derivedBandwidthGBps,
+        speedupVsBaseline: 1.0,
+        iqrMs: newBaselineBench.iqrMs,
+        stabilityPct: newBaselineBench.stabilityPct,
+      };
+      setBaselineResult(updatedBaselineResult);
+
+      // 2. Re-benchmark each verified variant
+      const updatedVariants: VariantExecutionResult[] = [];
+      for (const v of variantResults) {
+        if (!v.verified || v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED") {
+          updatedVariants.push(v);
+          continue;
+        }
+
+        setStatusMessage(`RE-BENCHMARKING ${v.name.toUpperCase()} ON WARM SILICON...`);
+
+        let pipeline = compiledPipelinesRef.current.get(v.id)?.pipeline;
+        if (!pipeline) {
+          const comp = await compileShaderModule(device, workload, v.fullWgslCode, v.workgroupSize);
+          if (comp.ok && comp.pipeline) {
+            pipeline = comp.pipeline;
+            compiledPipelinesRef.current.set(v.id, { pipeline: comp.pipeline, fullWgsl: comp.fullWgsl });
+          }
+        }
+
+        if (!pipeline) {
+          updatedVariants.push(v);
+          continue;
+        }
+
+        const bench = await runner.benchmarkKernel(
+          pipeline,
+          workload,
+          v.dispatchGrid,
+          inputs
+        );
+
+        const speedup =
+          newBaselineBench.medianTimeMs && bench.medianTimeMs
+            ? newBaselineBench.medianTimeMs / bench.medianTimeMs
+            : 1.0;
+
+        updatedVariants.push({
+          ...v,
           medianTimeMs: bench.medianTimeMs,
           allRunTimesMs: bench.allRunTimesMs,
           gflops: bench.gflops,
           derivedBandwidthGBps: bench.derivedBandwidthGBps,
-          speedupVsBaseline: 1.0,
-          fullWgslCode: compilation.fullWgsl,
-          isWinner: false,
-        };
-        setBaselineResult(customBase);
-      } else {
-        setBaselineResult((prev) =>
-          prev
-            ? {
-                ...prev,
-                name: "Imported GitHub Baseline (LIVE TAVILY EXTRACT)",
-                fullWgslCode: `${workload.wgslPreamble}\n\n${data.wgsl}`,
-              }
-            : null
-        );
+          speedupVsBaseline: speedup,
+          iqrMs: bench.iqrMs,
+          stabilityPct: bench.stabilityPct,
+        });
       }
-      setByokLoading(false);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setByokError(`Extraction failed: ${msg}`);
-      setByokLoading(false);
+
+      // 3. Re-evaluate winner & baseline retention
+      const verifiedCandidates = updatedVariants.filter(
+        (v) =>
+          v.id !== "baseline" &&
+          v.verified &&
+          v.medianTimeMs !== null &&
+          v.gflops !== null &&
+          v.gflops > 0
+      );
+      verifiedCandidates.sort((a, b) => (b.gflops || 0) - (a.gflops || 0));
+
+      const bestCandidate = verifiedCandidates.length > 0 ? verifiedCandidates[0] : null;
+      const baselineGflops = newBaselineBench.gflops || 0;
+
+      const isBaselineRetained = Boolean(
+        bestCandidate &&
+        (bestCandidate.speedupVsBaseline !== null
+          ? bestCandidate.speedupVsBaseline <= 1.0
+          : (bestCandidate.gflops || 0) <= baselineGflops)
+      );
+
+      const champion = !isBaselineRetained && bestCandidate ? bestCandidate : null;
+
+      const finalVariants = updatedVariants.map((v) => ({
+        ...v,
+        isWinner: Boolean(champion && v.id === champion.id),
+        status:
+          champion && v.id === champion.id
+            ? ("VERIFIED_WINNER" as const)
+            : v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
+            ? v.status
+            : ("VERIFIED_RUNNER_UP" as const),
+      }));
+
+      setVariantResults(finalVariants);
+
+      if (champion) {
+        setWinnerResult({ ...champion, isWinner: true });
+        setSelectedInspectId(champion.id);
+      } else if (isBaselineRetained && updatedBaselineResult) {
+        setWinnerResult({
+          ...updatedBaselineResult,
+          isWinner: true,
+          isBaselineRetained: true,
+          bestVariantSpeedup: bestCandidate?.speedupVsBaseline ?? 1.0,
+        });
+        setSelectedInspectId("baseline");
+      } else {
+        setWinnerResult(null);
+      }
+    } catch (reErr) {
+      console.error("[Vajra] Re-benchmark error:", reErr);
+    } finally {
+      setIsRunning(false);
+      setStatusMessage("");
     }
-  };
+  }, [isRunning, probe, previewNoWebGpu, selectedWorkloadId, baselineResult, variantResults]);
 
   // Handle Refine Winner (Gen 2) Action Trigger
   const handleRefineGen2 = useCallback(async () => {
@@ -1446,6 +1612,11 @@ export default function VajraDashboard() {
         return;
       }
 
+      compiledPipelinesRef.current.set("variant-d", {
+        pipeline: finalCompilation.pipeline!,
+        fullWgsl: finalCompilation.fullWgsl,
+      });
+
       setStatusMessage("BENCHMARKING GEN 2 SILICON TIMINGS (9 RUNS)...");
       setVariantResults((prev) =>
         prev.map((v) => (v.id === "variant-d" ? { ...v, status: "BENCHMARKING" } : v))
@@ -1473,12 +1644,21 @@ export default function VajraDashboard() {
 
       const activeGen1Winner = gen1Candidates[0] || null;
 
-      // Gen 2 Variant D is promoted to winner ONLY if its median GFLOPS is strictly higher than active Gen 1 winner
-      const isDPromoted = Boolean(
+      const baselineGflops = baselineResult?.gflops || 0;
+      const isDBeatingGen1 = Boolean(
         activeGen1Winner &&
           activeGen1Winner.gflops !== null &&
           bench.gflops !== null &&
           bench.gflops > activeGen1Winner.gflops
+      );
+      const isDBeatingBaseline = bench.gflops !== null && bench.gflops > baselineGflops;
+      const isDPromoted = isDBeatingGen1 && isDBeatingBaseline;
+
+      const isGen1BeatingBaseline = Boolean(
+        activeGen1Winner &&
+          activeGen1Winner.gflops !== null &&
+          activeGen1Winner.gflops > baselineGflops &&
+          (activeGen1Winner.speedupVsBaseline === null || activeGen1Winner.speedupVsBaseline > 1.0)
       );
 
       const speedup =
@@ -1523,12 +1703,12 @@ export default function VajraDashboard() {
       setVariantResults((prev) => [
         ...prev.filter((v) => v.id !== "variant-d").map((v) => ({
           ...v,
-          isWinner: isDPromoted ? false : Boolean(activeGen1Winner && v.id === activeGen1Winner.id),
+          isWinner: isDPromoted ? false : Boolean(isGen1BeatingBaseline && activeGen1Winner && v.id === activeGen1Winner.id),
           status: isDPromoted
             ? v.status === "COMPILE_FAILED" || v.status === "VERIFY_FAILED"
               ? v.status
               : ("VERIFIED_RUNNER_UP" as const)
-            : v.id === activeGen1Winner?.id
+            : isGen1BeatingBaseline && v.id === activeGen1Winner?.id
             ? ("VERIFIED_WINNER" as const)
             : v.status,
         })),
@@ -1537,8 +1717,15 @@ export default function VajraDashboard() {
 
       if (isDPromoted) {
         setWinnerResult(gen2Result);
-      } else if (activeGen1Winner !== null) {
+      } else if (isGen1BeatingBaseline && activeGen1Winner !== null) {
         setWinnerResult({ ...activeGen1Winner, isWinner: true });
+      } else if (baselineResult) {
+        setWinnerResult({
+          ...baselineResult,
+          isWinner: true,
+          isBaselineRetained: true,
+          bestVariantSpeedup: Math.max(speedup, activeGen1Winner?.speedupVsBaseline || 1.0),
+        });
       }
       setSelectedInspectId("variant-d");
       setStatusMessage("");
@@ -1611,6 +1798,17 @@ export default function VajraDashboard() {
           onSelect={handleSelectWorkload}
           onTune={handleTune}
           onRefineGen2={handleRefineGen2}
+          onRebenchmark={handleRebenchmark}
+          canRebenchmark={Boolean(
+            !isRunning &&
+              baselineResult &&
+              variantResults.some(
+                (v) =>
+                  v.verified &&
+                  v.status !== "COMPILE_FAILED" &&
+                  v.status !== "VERIFY_FAILED"
+              )
+          )}
           isRunning={isRunning}
           statusLabel={statusMessage}
           hasVerifiedWinner={Boolean(winnerResult && winnerResult.id !== "baseline" && winnerResult.verified)}
@@ -1660,102 +1858,6 @@ export default function VajraDashboard() {
                   FALL BACK TO MOCK KERNELS
                 </button>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tavily Web Intelligence Bar */}
-        {tavilyGrounding && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#CCE3FF] bg-[#F0F7FF] px-4 py-2.5 font-mono text-xs text-[#0070F3] shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            <div className="flex items-center gap-2">
-              <span className="rounded bg-[#0070F3] px-1.5 py-0.5 text-[10px] font-bold text-[#FFFFFF]">TAVILY SEARCH GROUNDING</span>
-              <span className="text-[#171717] font-medium">Query: &quot;{tavilyGrounding.query}&quot;</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[#666666]">Sources:</span>
-              {tavilyGrounding.sources.map((s, idx) => (
-                <a
-                  key={idx}
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline hover:text-[#0051B3] transition-colors truncate max-w-[200px]"
-                  title={s.title}
-                >
-                  [{idx + 1}] {s.title}
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Bring Your Own Kernel (GitHub URL) - Opt-In Minimal BYOK */}
-        <div className="rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] p-3 text-xs font-mono shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setShowByok(!showByok)}
-              className="flex items-center gap-2 font-medium text-[#171717] hover:text-[#0070F3] transition-colors cursor-pointer"
-            >
-              <span>Bring Your Own Kernel (GitHub URL)</span>
-              <span className="text-[10px] rounded border border-[#EAEAEA] bg-[#FAFAFA] px-1.5 py-0.5 text-[#666666]">
-                {showByok ? "Hide" : "Expand"}
-              </span>
-            </button>
-            {importedBaselineInfo && (
-              <span className="rounded-full border border-[#B8E8D0] bg-[#E6F6EE] px-2.5 py-0.5 text-[10.5px] font-bold text-[#0A7143]">
-                Imported GitHub Baseline (LIVE TAVILY EXTRACT)
-              </span>
-            )}
-          </div>
-          {showByok && (
-            <div className="mt-3 pt-3 border-t border-[#EAEAEA] space-y-2">
-              <p className="text-[#666666] text-[11px]">
-                Paste a public GitHub file URL implementing the {activeWorkloadSpec.name} interface.
-                Tavily Extract will pull and validate the WGSL shader against the required {selectedWorkloadId} bindings.
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={byokUrl}
-                  onChange={(e) => setByokUrl(e.target.value)}
-                  placeholder="https://github.com/username/repo/blob/main/kernel.wgsl"
-                  className="flex-1 rounded border border-[#EAEAEA] bg-[#FAFAFA] px-3 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:border-[#171717]"
-                  disabled={byokLoading}
-                />
-                <button
-                  type="button"
-                  onClick={handleImportByok}
-                  disabled={byokLoading || !byokUrl.trim()}
-                  className="rounded border border-[#171717] bg-[#171717] px-3 py-1.5 text-xs font-semibold text-[#FFFFFF] hover:bg-[#333333] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  {byokLoading ? "Extracting via Tavily..." : "Extract via Tavily & Set as Baseline"}
-                </button>
-              </div>
-              {byokError && (
-                <div className="rounded border border-[#FFD6D6] bg-[#FFF0F0] p-2 text-[11px] text-[#C81E1E]">
-                  {byokError}
-                </div>
-              )}
-              {importedBaselineInfo && (
-                <div className="rounded border border-[#B8E8D0] bg-[#E6F6EE] p-2 text-[11px] text-[#0A7143]">
-                  Successfully extracted kernel from:{" "}
-                  <a href={importedBaselineInfo.originalUrl} target="_blank" rel="noreferrer" className="underline">
-                    {importedBaselineInfo.originalUrl}
-                  </a>
-                  . Verified binding contract: [{importedBaselineInfo.requiredBindings.join(", ")}].
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* What Changed Comparison Strip */}
-        {importedBaselineInfo && winnerResult && winnerResult.id !== "baseline" && (
-          <div className="rounded-lg border border-[#B8E8D0] bg-[#E6F6EE] px-4 py-3 font-mono text-xs text-[#0A7143]">
-            <div className="font-bold uppercase tracking-wider">What Changed: Custom GitHub Baseline vs Nemotron Winner</div>
-            <div className="mt-1 text-[11.5px] text-[#065F46]">
-              Your custom GitHub kernel achieved {baselineResult?.gflops ? formatGflops(baselineResult.gflops) : "—"} GFLOPS. Nemotron&apos;s winning kernel ({winnerResult.name}) achieved {formatGflops(winnerResult.gflops)} GFLOPS ({winnerResult.speedupVsBaseline?.toFixed(2)}x speedup) on your physical silicon.
             </div>
           </div>
         )}

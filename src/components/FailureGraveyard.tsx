@@ -93,7 +93,7 @@ export const FailureGraveyard: React.FC<FailureGraveyardProps> = ({ variants }) 
                 : isCompile
                 ? (v.isSimulatedFailure
                     ? "Line 18:14 — error: unresolved call target 'unknown_intrinsic_fn(u32)'"
-                    : "WebGPU shader compilation error")
+                    : "no compiler detail available")
                 : `Max relative float error (${v.maxRelativeError !== null && v.maxRelativeError !== undefined ? v.maxRelativeError.toExponential(2) : "—"}) exceeded strict 1e-4 tolerance.`;
 
             let snippet = "";
@@ -103,7 +103,7 @@ export const FailureGraveyard: React.FC<FailureGraveyardProps> = ({ variants }) 
               } else if (v.compileErrors.length > 0) {
                 snippet = `// Offending compiler diagnostic:\n${v.compileErrors.join("\n")}`;
               } else {
-                snippet = `// WebGPU shader compilation error:\nShader module compilation rejected by WebGPU device.`;
+                snippet = `// Offending compiler diagnostic:\nno compiler detail available`;
               }
             } else {
               snippet = `// Numerical tolerance verification failed:\nMeasured error: ${v.maxRelativeError !== null && v.maxRelativeError !== undefined ? v.maxRelativeError.toExponential(3) : "—"} (tolerance threshold: 1.000e-4)`;

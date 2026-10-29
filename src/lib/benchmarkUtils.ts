@@ -143,7 +143,9 @@ export function getDeterministicErrorSummary(variant: VariantExecutionResult): s
     const rawError =
       variant.compileErrors.length > 0
         ? variant.compileErrors[0]
-        : "Shader compilation error";
+        : variant.isSimulatedFailure
+        ? "Line 18:14 — error: unresolved call target 'unknown_intrinsic_fn(u32)'"
+        : "no compiler detail available";
     const firstLine = rawError.split("\n")[0].trim().replace(/\s+/g, " ");
     return `Failed at compile stage: ${firstLine} (quarantined, excluded from winner, fed to Gen 2).`;
   }

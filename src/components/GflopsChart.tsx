@@ -67,7 +67,8 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
         <div className="my-5 space-y-4">
           {allItems.map((item, idx) => {
             if (!item) return null;
-            const isWinner = item.id !== "baseline" && Boolean(item.isWinner);
+            const isWinner = item.id !== "baseline" && Boolean(item.isWinner) && (item.speedupVsBaseline === null || item.speedupVsBaseline > 1.0);
+            const isBaselineRetainedItem = item.id === "baseline" && Boolean(item.isWinner || item.isBaselineRetained || (!variants.some(v => v.isWinner && v.speedupVsBaseline && v.speedupVsBaseline > 1.0) && variants.some(v => v.verified)));
             const isFailed = item.status === "COMPILE_FAILED";
             const isVerFailed = item.status === "VERIFY_FAILED";
             const isBusy =
@@ -105,12 +106,20 @@ export const GflopsChart: React.FC<GflopsChartProps> = ({
                           <Trophy className="h-3 w-3" />
                           FASTEST WINNER
                         </span>
-                        {item.speedupVsBaseline !== null && item.speedupVsBaseline < 1.0 && (
-                          <span className="rounded-full border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#C81E1E]">
-                            Slower than baseline
-                          </span>
-                        )}
                       </div>
+                    )}
+                    {isBaselineRetainedItem && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1 rounded-full bg-[#171717] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#FFFFFF]">
+                          <Trophy className="h-3 w-3" />
+                          BASELINE RETAINED
+                        </span>
+                      </div>
+                    )}
+                    {item.id !== "baseline" && item.speedupVsBaseline !== null && item.speedupVsBaseline <= 1.0 && !isFailed && !isVerFailed && (
+                      <span className="rounded-full border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#C81E1E]">
+                        Slower than baseline
+                      </span>
                     )}
                   </div>
                   {/* Right Tabular Readout (Guaranteed no truncation) */}

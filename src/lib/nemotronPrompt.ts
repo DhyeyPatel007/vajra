@@ -1,6 +1,6 @@
 import { GeneratedVariant, WorkloadSpec } from "@/types/vajra";
 import { parseWorkgroupSize, repairEarlyReturnBeforeBarrier } from "./webgpuHarness";
-import { hoistWorkgroupVarsAndFixConst } from "./wgslValidator";
+import { hoistWorkgroupVarsAndFixConst, sanitizeWgslBodyScopes } from "./wgslValidator";
 
 /**
  * Repairs module-scope 'let' declarations into 'const'.
@@ -260,7 +260,7 @@ export function sanitizeWgslBody(rawBody: string, maxWorkgroupSize: number = 256
   cleaned = cleaned.replace(/struct\s+Params\s*\{[^}]*\};?/g, "");
 
   // Hoist function-scope var<workgroup> to module scope and rewrite runtime const/auto to let
-  cleaned = hoistWorkgroupVarsAndFixConst(cleaned);
+  cleaned = sanitizeWgslBodyScopes(cleaned);
 
   // Repair module-scope 'let' to 'const'
   cleaned = repairModuleScopeLet(cleaned);
@@ -334,25 +334,26 @@ Your task is to synthesize exactly ONE evolved variant: "variant-d".
 
 CRITICAL GEN 2 CONSTRAINTS:
 1. PREAMBLE IS FIXED: Do NOT output struct Params or any @group(0) @binding(...) declarations.
-2. FUSED EVOLUTION: Fuse the winning Gen 1 strategy with register caching, 4-way unrolled fma() accumulation, and uniform shared memory tiling.
-3. **BARRIER UNIFORMITY: NEVER put workgroupBarrier() after an early return or inside a divergent if.** All barriers must execute uniformly.
+2. CONSERVATIVE MUTATE-WINNER RULE: Variant D MUST refine the verified Gen 1 winner's exact working structure — preserve its buffer indexing and boundary guards. Allowed only: fma(), 4x loop unrolling on the reduction/filter dimension, hoisting loop-invariant index math into let bindings, tuning @workgroup_size.
+3. PROMOTION CRITERIA: Variant D MUST compile and pass < 1e-4 float verification to be promoted. If it fails either compilation or verification, it is quarantined and the Gen 1 winner is retained.
 4. **W3C WGSL ADDRESS SPACES & SCOPES (CRITICAL):**
-   - var<workgroup> shared arrays MUST ONLY be declared at MODULE SCOPE outside fn main(...), before @compute. NEVER declare var<workgroup> inside fn main(...) or any function — function-scope workgroup vars cause compiler failure!
-   - Inside fn main, NEVER use const for expressions reading uniforms (params.*), builtins (gid.*, lid.*), or arrays. ALWAYS use let for local variables.
+   - If var<workgroup> is used, it MUST ONLY be declared at MODULE SCOPE outside fn main(...), before @compute. NEVER declare var<workgroup> inside fn main(...) or any function — function-scope workgroup vars cause compiler failure!
+   - Inside fn main, NEVER use const for runtime expressions reading uniforms (params.*), builtins (gid.*, lid.*), or arrays. ALWAYS use let for local variables.
    - In WGSL, 'let' is strictly forbidden at module scope (use 'const' for module constants).
    - Never use C++ keywords like auto. Use let.
-   - All storage buffers are scalar array<f32>. Vectorization must assemble vec4<f32>(buf[idx], buf[idx+1], buf[idx+2], buf[idx+3]).
-5. WORKGROUP SIZE HARDWARE LIMIT: Maximum ${maxWorkgroupSize} invocations per workgroup (workgroup_size X*Y*Z <= ${maxWorkgroupSize}).
-6. GUARDRAILS: Do NOT repeat any syntax or intrinsic errors that caused compiler failures in dropped variants.
-7. NUMERICAL EQUIVALENCE: Must maintain exact IEEE-754 correctness within 1e-4 relative error.
-8. STRICT JSON ONLY: Return ONLY a raw JSON object with no markdown commentary:
+   - All storage buffers are scalar array<f32>.
+5. **BARRIER UNIFORMITY:** NEVER put workgroupBarrier() after an early return or inside a divergent if. All barriers must execute uniformly across all invocations.
+6. WORKGROUP SIZE HARDWARE LIMIT: Maximum ${maxWorkgroupSize} invocations per workgroup (workgroup_size X*Y*Z <= ${maxWorkgroupSize}).
+7. GUARDRAILS: Do NOT repeat any syntax or intrinsic errors that caused compiler failures in dropped variants.
+8. NUMERICAL EQUIVALENCE: Must maintain exact IEEE-754 correctness within 1e-4 relative error.
+9. STRICT JSON ONLY: Return ONLY a raw JSON object with no markdown commentary:
 {
   "variants": [
     {
       "id": "variant-d",
       "name": "Variant D: Gen 2 Fused Tile + Unrolled FMA Pipeline",
       "strategy": "gen2_evolved",
-      "rationale": "One-sentence explanation of the evolutionary synthesis.",
+      "rationale": "Refines Gen 1 winner structure with unrolled reduction and invariant hoisting.",
       "elementsPerThread": [1, 1, 1],
       "wgslBody": "..."
     }
@@ -416,11 +417,14 @@ Each thread row = gid.x processes 1 row. Do NOT use workgroupBarrier(). Use @wor
 Description: ${workload.description}
 Problem Dimensions: [${workload.problemDims.join(", ")}]
 Hardware Workgroup Limit: Maximum ${maxWorkgroupSize} invocations per workgroup (X*Y*Z <= ${maxWorkgroupSize}).
-WGSL Rules:
-- var<workgroup> shared arrays MUST be declared at MODULE SCOPE outside fn main (before @compute). NEVER declare var<workgroup> inside fn main!
+WGSL Rules & Mutate-Winner Directive:
+- CONSERVATIVE MUTATE-WINNER: Variant D MUST refine the verified Gen 1 winner's exact working structure — preserve its buffer indexing and boundary guards.
+- ALLOWED MODIFICATIONS ONLY: fma(), 4x loop unrolling on the reduction/filter dimension, hoisting loop-invariant index math into let bindings, tuning @workgroup_size.
+- If var<workgroup> is used, it MUST be declared at MODULE SCOPE outside fn main (before @compute). NEVER declare var<workgroup> inside fn main!
 - Inside fn main, NEVER use const for runtime expressions (builtins, params, buffers). ALWAYS use let.
 - In WGSL, 'let' is forbidden at module scope; use 'const' for module constants.
 - NEVER put workgroupBarrier() after an early return or inside a divergent if.
+- PROMOTION REQUIREMENT: Variant D MUST compile and pass < 1e-4 float verification to be promoted. If it fails either compilation or verification, it is quarantined and the Gen 1 winner is retained.
 ${gen2Instruction}
 
 Fixed Harness WGSL Preamble (DO NOT REPEAT):
@@ -432,7 +436,7 @@ ${winnerInfo}
 
 ${failureInfo}
 
-Produce ONE evolved Generation 2 kernel ("variant-d") that improves upon the Gen 1 winner while strictly avoiding the compiler faults above. Return valid JSON matching the schema.`;
+Produce ONE evolved Generation 2 kernel ("variant-d") refining the Gen 1 winner. Return valid JSON matching the schema.`;
 }
 
 export function parseNemotronGen2Response(

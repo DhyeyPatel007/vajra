@@ -17,13 +17,14 @@
 +-------------------------------------------------------------------------------------------------+
 |                                                                                                 |
 |   COMPUTE THROUGHPUT COMPARISON (GFLOPS)       |   FASTEST VERIFIED KERNEL                      |
-|   9-run hardware median • higher is faster     |   Variant C: 16x16 Tiled + Vec4 Dot-Product    |
-|                                                |                                                |
-|   Baseline   [ 112.6 GFLOPS (1.00x) ]          |   SPEEDUP VS. BASELINE    MEDIAN THROUGHPUT    |
-|   Variant A  [ 257.6 GFLOPS (2.29x) ]          |   4.35x                   489.8 GFLOPS         |
-|   Variant B  [ 386.8 GFLOPS (3.44x) ]          |                                                |
-|   Variant C  [ 489.8 GFLOPS (4.35x) ] ★ WINNER |   Latency: 0.548 ms  •  Bandwidth: 5.74 GB/s   |
-|   Variant D  [ 542.4 GFLOPS (4.82x) ] ★ GEN 2  |   Accuracy: Verified (< 1e-4)                  |
+|   9-run hardware median • higher is faster     |   Variant B: Shared Memory Tiling              |
+|   Measured on physical AMD RDNA-3 Silicon      |                                                |
+|                                                |   SPEEDUP VS. BASELINE    MEDIAN THROUGHPUT    |
+|   Baseline   [  25.6 GFLOPS (1.00x) ]          |   4.04x                   103.4 GFLOPS         |
+|   Variant A  [  48.5 GFLOPS (1.89x) ]          |                                                |
+|   Variant B  [ 103.4 GFLOPS (4.04x) ] ★ WINNER |   Latency: 2.597 ms  •  Bandwidth: 1.21 GB/s   |
+|   Variant C  [ QUARANTINED (> 1e-4) ]          |   Accuracy: Verified (< 1e-4, exact 0.0)       |
+|   Variant D  [ QUARANTINED (> 1e-4) ]          |   Status: Guardrail Enforced                   |
 |                                                                                                 |
 +-------------------------------------------------------------------------------------------------+
 ```
@@ -214,14 +215,12 @@ $$\text{IQR} = \text{sorted}[6] - \text{sorted}[2], \quad \text{Stability \%} = 
 
 ---
 
-### Live GPU Results (TBD — to be updated after real PC GPU test)
+### Live GPU Results (AMD Radeon 780M / RDNA-3 Silicon • Live Token Factory)
 
 | Workload | Target GPU Device | Baseline (GFLOPS) | Winner GFLOPS | Measured Speedup | Gen 2 Uplift | Verification Status |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **SGEMM** | *TBD (Pending PC run)* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
-| **Softmax** | *TBD (Pending PC run)* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
-| **Conv1D** | *TBD (Pending PC run)* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
-| **Sobel** | *TBD (Pending PC run)* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
+| **SGEMM** | `amd / rdna-3` (Live Token Factory) | 25.6 GFLOPS | **103.4 GFLOPS** (Winner B) | **4.04x** | Winner B Retained | **Verified** (`0.0` exact) |
+| **Softmax** | `amd / rdna-3` (Live Token Factory) | 0.08 GFLOPS | **1.89 GFLOPS** (Gen 2 D) | **25.13x** | **+221.8% vs Winner C** | **Verified** (`1.83e-6` < 1e-4) |
 
 ---
 

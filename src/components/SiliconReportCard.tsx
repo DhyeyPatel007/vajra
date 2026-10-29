@@ -31,6 +31,7 @@ interface SiliconReportCardProps {
 
 export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
   winner,
+  baseline,
   variants = [],
   modelId,
   isMock,
@@ -59,7 +60,13 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
     );
   }
 
-  if (!winner || winner.id === "baseline") {
+  const isBaselineRetained = Boolean(
+    winner?.isBaselineRetained ||
+    (winner && winner.id === "baseline" && variants.length > 0) ||
+    (winner && winner.speedupVsBaseline !== null && winner.speedupVsBaseline <= 1.0)
+  );
+
+  if (!winner || (winner.id === "baseline" && variants.length === 0)) {
     return (
       <div className="flex h-full flex-col justify-center rounded-lg border border-[#EAEAEA] bg-[#FFFFFF] p-6 text-center shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <Trophy className="mx-auto h-8 w-8 text-[#888888]" />
@@ -73,27 +80,40 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
     );
   }
 
-  const speedup = winner.speedupVsBaseline || 1.0;
-  const threadsPerWg =
-    winner.workgroupSize[0] * winner.workgroupSize[1] * winner.workgroupSize[2];
-  const totalWorkgroups =
-    winner.dispatchGrid[0] * winner.dispatchGrid[1] * winner.dispatchGrid[2];
-
-  const strategyBadge = getStrategyBadgeLabel(
-    winner.strategy,
-    workloadId,
-    winner.name,
-    winner.sharedMemoryBytes
+  const verifiedVariantsWithSpeedup = variants.filter(
+    (v) => v.verified && v.speedupVsBaseline !== null && v.id !== "baseline"
   );
+  const bestVariantSpeedup =
+    winner.bestVariantSpeedup ??
+    (verifiedVariantsWithSpeedup.length > 0
+      ? Math.max(...verifiedVariantsWithSpeedup.map((v) => v.speedupVsBaseline!))
+      : 1.0);
+
+  const displayItem = isBaselineRetained ? (baseline || winner) : winner;
+  const speedup = isBaselineRetained ? 1.0 : (winner.speedupVsBaseline || 1.0);
+  const threadsPerWg =
+    displayItem.workgroupSize[0] * displayItem.workgroupSize[1] * displayItem.workgroupSize[2];
+  const totalWorkgroups =
+    displayItem.dispatchGrid[0] * displayItem.dispatchGrid[1] * displayItem.dispatchGrid[2];
+
+  const strategyBadge = isBaselineRetained
+    ? "Baseline Retained"
+    : getStrategyBadgeLabel(
+        winner.strategy,
+        workloadId,
+        winner.name,
+        winner.sharedMemoryBytes
+      );
 
   // Gen 2 Uplift against active Gen 1 winner computed live from unrounded medians
-  const uplift = winner.id === "variant-d" ? computeGen2Uplift(winner, variants) : null;
+  const uplift = !isBaselineRetained && winner.id === "variant-d" ? computeGen2Uplift(winner, variants) : null;
   const upliftText = uplift?.badgeText || null;
-  const cleanRationale = winner.rationale.replace(/\s*\([^)]*vs Gen 1[^)]*\)/i, "").trim();
-  const displayRationale =
-    winner.id === "variant-d" && upliftText
-      ? (winner.rationale.includes(upliftText) ? winner.rationale : `${cleanRationale} (${upliftText})`)
-      : winner.rationale;
+  const cleanRationale = displayItem.rationale.replace(/\s*\([^)]*vs Gen 1[^)]*\)/i, "").trim();
+  const displayRationale = isBaselineRetained
+    ? "Baseline retained as active champion: candidate variants did not exceed baseline throughput on this hardware pass."
+    : winner.id === "variant-d" && upliftText
+    ? (winner.rationale.includes(upliftText) ? winner.rationale : `${cleanRationale} (${upliftText})`)
+    : displayItem.rationale;
 
   const workload = workloadId ? WORKLOADS[workloadId] : null;
   const arithmeticIntensity = workload
@@ -103,14 +123,14 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
     ? workload.totalFlops / workload.totalBytesMoved >= 10
     : false;
 
-  const sharedMemBytes = winner.sharedMemoryBytes ?? 0;
+  const sharedMemBytes = displayItem.sharedMemoryBytes ?? 0;
   const sharedMemDisplay =
     sharedMemBytes > 0
       ? `${sharedMemBytes.toLocaleString()} B / 16,384 B (${((sharedMemBytes / 16384) * 100).toFixed(1)}% Limit)`
       : "0 B (Register Only)";
 
-  const stabilityPct = winner.stabilityPct ?? 99.2;
-  const iqrMs = winner.iqrMs ?? 0.003;
+  const stabilityPct = displayItem.stabilityPct ?? 99.2;
+  const iqrMs = displayItem.iqrMs ?? 0.003;
   const stabilityDisplay = `${stabilityPct.toFixed(1)}% Stable (IQR ±${iqrMs.toFixed(3)} ms)`;
 
   return (
@@ -119,10 +139,16 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
       <div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
-            <span className="rounded-full bg-[#171717] px-2.5 py-0.5 font-mono text-[11px] font-medium text-[#FFFFFF]">
-              FASTEST VERIFIED KERNEL
-            </span>
-            {speedup < 1.0 && (
+            {isBaselineRetained ? (
+              <span className="rounded-full bg-[#171717] px-2.5 py-0.5 font-mono text-[11px] font-medium text-[#FFFFFF]">
+                {`BASELINE RETAINED — Best verified variant reached ${bestVariantSpeedup.toFixed(2)}x on this pass`}
+              </span>
+            ) : (
+              <span className="rounded-full bg-[#171717] px-2.5 py-0.5 font-mono text-[11px] font-medium text-[#FFFFFF]">
+                FASTEST VERIFIED KERNEL
+              </span>
+            )}
+            {!isBaselineRetained && speedup < 1.0 && (
               <span className="rounded-full border border-[#FFD6D6] bg-[#FFF0F0] px-2 py-0.5 font-mono text-[10.5px] font-medium text-[#C81E1E]">
                 Slower than baseline
               </span>
@@ -141,7 +167,7 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
         </div>
 
         <h2 className="mt-2.5 text-[18px] font-semibold tracking-[-0.02em] text-[#171717]">
-          {winner.name}
+          {isBaselineRetained ? "Naive Baseline (Retained)" : displayItem.name}
         </h2>
         <p className="mt-1 text-[13px] text-[#666666] font-normal leading-relaxed">
           {displayRationale}
@@ -158,7 +184,7 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
               {`${speedup.toFixed(2)}x`}
             </div>
             <div className="mt-1 font-mono text-[11px] text-[#888888]">
-              Measured hardware speedup
+              {isBaselineRetained ? "Baseline reference retained" : "Measured hardware speedup"}
             </div>
           </div>
 
@@ -169,7 +195,7 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
             </div>
             <div className="mt-1 flex items-baseline gap-1">
               <span className="font-mono text-[36px] font-semibold tracking-[-0.04em] text-[#171717] leading-none whitespace-nowrap tabular-nums">
-                {formatGflops(winner.gflops)}
+                {formatGflops(displayItem.gflops)}
               </span>
               <span className="font-mono text-[13px] font-normal text-[#666666]">
                 GFLOPS
@@ -186,14 +212,14 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
           <div className="rounded-md border border-[#EAEAEA] bg-[#FAFAFA] p-2.5">
             <div className="text-[11px] text-[#666666] uppercase">Latency</div>
             <div className="mt-1 font-semibold text-[#171717] tabular-nums whitespace-nowrap">
-              {winner.medianTimeMs ? `${winner.medianTimeMs.toFixed(3)} ms` : "—"}
+              {displayItem.medianTimeMs ? `${displayItem.medianTimeMs.toFixed(3)} ms` : "—"}
             </div>
           </div>
           <div className="rounded-md border border-[#EAEAEA] bg-[#FAFAFA] p-2.5">
             <div className="text-[11px] text-[#666666] uppercase">Bandwidth</div>
             <div className="mt-1 font-semibold text-[#171717] tabular-nums whitespace-nowrap">
-              {winner.derivedBandwidthGBps
-                ? `${winner.derivedBandwidthGBps.toFixed(2)} GB/s`
+              {displayItem.derivedBandwidthGBps
+                ? `${displayItem.derivedBandwidthGBps.toFixed(2)} GB/s`
                 : "—"}
             </div>
           </div>
@@ -201,7 +227,7 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
             <div className="text-[11px] text-[#666666] uppercase">Accuracy</div>
             <div className="mt-1 flex items-center gap-1 font-semibold text-[#0A7143] whitespace-nowrap">
               <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-              <span>Verified (&lt;1e-4)</span>
+              <span>{isBaselineRetained ? "Verified (Reference)" : "Verified (<1e-4)"}</span>
             </div>
           </div>
         </div>
@@ -229,13 +255,13 @@ export const SiliconReportCard: React.FC<SiliconReportCardProps> = ({
                 <div>
                   <div className="text-[#666666]">Workgroup Config</div>
                   <div className="mt-0.5 font-semibold text-[#171717]">
-                    ({winner.workgroupSize.join(", ")}) • {threadsPerWg} th/wg
+                    ({displayItem.workgroupSize.join(", ")}) • {threadsPerWg} th/wg
                   </div>
                 </div>
                 <div>
                   <div className="text-[#666666]">Dispatch Grid</div>
                   <div className="mt-0.5 font-semibold text-[#171717]">
-                    [{winner.dispatchGrid.join(", ")}] • {totalWorkgroups.toLocaleString()} total
+                    [{displayItem.dispatchGrid.join(", ")}] • {totalWorkgroups.toLocaleString()} total
                   </div>
                 </div>
               </div>

@@ -200,7 +200,10 @@ const VariantCardItem: React.FC<VariantCardItemProps> = ({
     );
   }
 
-  const isWinner = card.id !== "baseline" && Boolean(card.isWinner);
+  const isWinner =
+    card.id !== "baseline" &&
+    Boolean(card.isWinner) &&
+    (card.speedupVsBaseline === null || card.speedupVsBaseline > 1.0);
   const isCompileFailed = card.status === "COMPILE_FAILED";
   const isVerifyFailed = card.status === "VERIFY_FAILED";
   const isFailed = isCompileFailed || isVerifyFailed;

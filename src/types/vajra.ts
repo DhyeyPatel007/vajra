@@ -122,6 +122,8 @@ export interface VariantExecutionResult {
   stabilityPct?: number;
   parentWinnerId?: string;
   isSimulatedFailure?: boolean;
+  isBaselineRetained?: boolean;
+  bestVariantSpeedup?: number;
 }
 
 export type VajraMode = "mock" | "nebius" | "nvidia";

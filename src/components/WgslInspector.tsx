@@ -75,8 +75,19 @@ export const WgslInspector: React.FC<WgslInspectorProps> = ({
     };
   };
 
+  const isBaselineRetained = Boolean(
+    winner?.isBaselineRetained ||
+    (winner && winner.id === "baseline" && variants.length > 0) ||
+    (winner && winner.speedupVsBaseline !== null && winner.speedupVsBaseline <= 1.0)
+  );
+
   const handleCopyFastest = async () => {
-    const codeToCopy = winner?.fullWgslCode || activeItem?.fullWgslCode || baseline?.fullWgslCode || "";
+    let codeToCopy = "";
+    if (isBaselineRetained) {
+      codeToCopy = baseline?.fullWgslCode || winner?.fullWgslCode || activeItem?.fullWgslCode || "";
+    } else {
+      codeToCopy = winner?.fullWgslCode || activeItem?.fullWgslCode || baseline?.fullWgslCode || "";
+    }
     if (codeToCopy) {
       await copyToClipboard(codeToCopy);
       setCopiedFastest(true);
@@ -299,7 +310,7 @@ export async function runVerified_${workloadSpec.id}(
             )}
           </button>
 
-          {/* Copy Fastest Winner Button */}
+          {/* Copy Fastest Winner / Baseline Button */}
           <button
             onClick={handleCopyFastest}
             className="flex items-center gap-1.5 rounded-md border border-[#171717] bg-[#171717] px-4 py-2 font-mono text-[12px] font-medium text-[#FFFFFF] transition-colors hover:bg-[#333333] active:bg-[#000000] cursor-pointer"
@@ -307,12 +318,20 @@ export async function runVerified_${workloadSpec.id}(
             {copiedFastest ? (
               <>
                 <Check className="h-4 w-4 text-[#FFFFFF]" />
-                <span>Copied Verified Fastest WGSL!</span>
+                <span>
+                  {isBaselineRetained
+                    ? "Copied Baseline WGSL (Retained)!"
+                    : "Copied Verified Fastest WGSL!"}
+                </span>
               </>
             ) : (
               <>
                 <Trophy className="h-4 w-4 fill-current text-[#FFFFFF]" />
-                <span>Copy Fastest WGSL</span>
+                <span>
+                  {isBaselineRetained
+                    ? "Copy Baseline WGSL (Retained)"
+                    : "Copy Fastest WGSL"}
+                </span>
               </>
             )}
           </button>

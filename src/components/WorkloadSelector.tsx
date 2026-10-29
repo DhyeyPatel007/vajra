@@ -10,6 +10,8 @@ interface WorkloadSelectorProps {
   onSelect: (id: WorkloadId) => void;
   onTune: () => void;
   onRefineGen2?: () => void;
+  onRebenchmark?: () => void;
+  canRebenchmark?: boolean;
   isRunning: boolean;
   statusLabel?: string;
   hasGen2Run?: boolean;
@@ -21,6 +23,8 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
   onSelect,
   onTune,
   onRefineGen2,
+  onRebenchmark,
+  canRebenchmark = false,
   isRunning,
   statusLabel,
   hasVerifiedWinner = false,
@@ -79,7 +83,31 @@ export const WorkloadSelector: React.FC<WorkloadSelectorProps> = ({
         </div>
 
         {/* Action Buttons Cluster */}
-        <div className="flex items-center justify-end gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center justify-end gap-2.5 shrink-0">
+          {/* Re-Benchmark on Warm GPU (0 Credits) */}
+          <button
+            onClick={() => {
+              if (!isRunning && canRebenchmark && onRebenchmark) {
+                onRebenchmark();
+              }
+            }}
+            disabled={isRunning || !canRebenchmark}
+            title={
+              !canRebenchmark
+                ? "Run initial benchmark before re-benchmarking"
+                : "Re-run benchmark loop on warm GPU (0 credits used)"
+            }
+            className={`rounded-md border px-3.5 py-2.5 font-mono text-[13px] font-medium whitespace-nowrap transition-colors ${
+              !canRebenchmark
+                ? "border-[#EAEAEA] bg-[#FAFAFA] text-[#888888] cursor-not-allowed opacity-60"
+                : isRunning
+                ? "border-[#10B981] bg-[#FFFFFF] text-[#10B981] cursor-not-allowed opacity-50"
+                : "border-[#10B981] bg-[#FFFFFF] text-[#0A7143] hover:bg-[#E6F6EE] cursor-pointer active:translate-y-0.5"
+            }`}
+          >
+            Re-Benchmark on Warm GPU (0 Credits)
+          </button>
+
           {/* Secondary CTA: Refine Winner (Gen 2) */}
           <button
             onClick={() => {
