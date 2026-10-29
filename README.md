@@ -221,6 +221,8 @@ $$\text{IQR} = \text{sorted}[6] - \text{sorted}[2], \quad \text{Stability \%} = 
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **SGEMM** | `amd / rdna-3` (Live Token Factory) | 25.6 GFLOPS | **103.4 GFLOPS** (Winner B) | **4.04x** | Winner B Retained | **Verified** (`0.0` exact) |
 | **Softmax** | `amd / rdna-3` (Live Token Factory) | 0.08 GFLOPS | **1.89 GFLOPS** (Gen 2 D) | **25.13x** | **+221.8% vs Winner C** | **Verified** (`1.83e-6` < 1e-4) |
+| **Conv1D** | `amd / rdna-3` (Live Token Factory • single run, 9-run median per run) | 24.0 GFLOPS | **27.8 GFLOPS** (Winner A) | **1.16x** | — (Gen 1 Only) | **Verified** (< 1e-4) |
+| **Sobel** | `amd / rdna-3` (Live Token Factory • single run, 9-run median per run) | 30.7 GFLOPS | **32.2 GFLOPS** (Winner A) | **1.05x** | — (Gen 1 Only) | **Verified** (`0.0` exact) |
 
 ---
 
