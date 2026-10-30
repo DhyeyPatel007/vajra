@@ -2,14 +2,14 @@
 
 > "Tunes per-device on any modern WebGPU browser, and falls back to recorded Preview where WebGPU is unavailable."
 
-[![Next.js](https://img.shields.io/badge/Next.js-15.1-black?logo=next.js)](https://nextjs.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-15.5.28-black?logo=next.js)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![WebGPU](https://img.shields.io/badge/WebGPU-API-green?logo=w3c)](https://www.w3.org/TR/webgpu/)
 [![Shader](https://img.shields.io/badge/Shader-WGSL-orange)](https://www.w3.org/TR/WGSL/)
 [![LLM](https://img.shields.io/badge/LLM-NVIDIA%20Nemotron-76B900?logo=nvidia)](https://build.nvidia.com/)
 [![Inference](https://img.shields.io/badge/Inference-Nebius%20Token%20Factory-6366F1)](https://tokenfactory.nebius.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-TBD-lightgrey)](#)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Active-brightgreen)](https://vajra.krynex.in)
 
 ---
 
@@ -17,14 +17,14 @@
 +-------------------------------------------------------------------------------------------------+
 |                                                                                                 |
 |   COMPUTE THROUGHPUT COMPARISON (GFLOPS)       |   FASTEST VERIFIED KERNEL                      |
-|   9-run hardware median • higher is faster     |   Variant B: Shared Memory Tiling              |
+|   9-run hardware median • higher is faster     |   Variant A: Workgroup Geometry                |
 |   Measured on physical AMD RDNA-3 Silicon      |                                                |
 |                                                |   SPEEDUP VS. BASELINE    MEDIAN THROUGHPUT    |
-|   Baseline   [  25.6 GFLOPS (1.00x) ]          |   4.04x                   103.4 GFLOPS         |
-|   Variant A  [  48.5 GFLOPS (1.89x) ]          |                                                |
-|   Variant B  [ 103.4 GFLOPS (4.04x) ] ★ WINNER |   Latency: 2.597 ms  •  Bandwidth: 1.21 GB/s   |
+|   Baseline   [  19.4 GFLOPS (1.00x) ]          |   1.07x                   20.6 GFLOPS          |
+|   Variant A  [  20.6 GFLOPS (1.07x) ] ★ WINNER |                                                |
+|   Variant B  [ QUARANTINED (> 1e-4) ]          |   Latency: 13.001 ms • Bandwidth: 0.24 GB/s    |
 |   Variant C  [ QUARANTINED (> 1e-4) ]          |   Accuracy: Verified (< 1e-4, exact 0.0)       |
-|   Variant D  [ QUARANTINED (> 1e-4) ]          |   Status: Guardrail Enforced                   |
+|   Variant D  [ QUARANTINED (Compile Error) ]   |   Status: Guardrail Enforced (A Retained)      |
 |                                                                                                 |
 +-------------------------------------------------------------------------------------------------+
 ```
@@ -35,7 +35,7 @@
 
 Vajra directly pairs Nebius Token Factory's ultra-low latency OpenAI-compatible inference with client-side WebGPU compilation and execution:
 
-- **[src/app/api/generate/route.ts](src/app/api/generate/route.ts)** — Server-side API route issuing OpenAI-compatible requests to `https://api.tokenfactory.nebius.com/v1/chat/completions`. Executes primary inference with **NVIDIA Nemotron Super** (`nvidia/nemotron-3-super-120b-a12b`), with automated non-blocking failover to **NVIDIA Nemotron Ultra** (`nvidia/Nemotron-3-Ultra-550b-a55b`). Implements both Gen 1 multi-candidate synthesis and Gen 2 evolutionary winner refinement.
+- **[src/app/api/generate/route.ts](src/app/api/generate/route.ts)** — Server-side API route issuing OpenAI-compatible requests to `https://api.tokenfactory.nebius.com/v1/chat/completions`. Executes primary inference with **NVIDIA Nemotron Super** (`nvidia/nemotron-3-super-120b-a12b`), with automated non-blocking failover to **NVIDIA Nemotron Ultra** (`nvidia/Nemotron-3-Ultra-550b-a55b`) (implemented, not yet exercised live). Implements both Gen 1 multi-candidate synthesis and Gen 2 evolutionary winner refinement.
 - **[src/lib/nemotronPrompt.ts](src/lib/nemotronPrompt.ts)** — System and user prompt architecture, strict JSON grammar schema enforcement, and robust WGSL sanitizer extracting pure compute shader bodies while preserving binding contracts.
 - **[src/lib/webgpuHarness.ts](src/lib/webgpuHarness.ts)** — Client-side WebGPU runtime harness: static resource parser, `device.createShaderModule()` compiler validation via `getCompilationInfo()`, numerical verification gate ($\text{maxRelError} < 10^{-4}$ against CPU/naive baseline), and 9-run median hardware timer (`timestamp-query` with wall-clock fallback).
 
@@ -59,7 +59,7 @@ Vajra directly pairs Nebius Token Factory's ultra-low latency OpenAI-compatible 
   - [Gen 1 Benchmark Results (Recorded M3 Max Reference)](#gen-1-benchmark-results-recorded-m3-max-reference)
   - [Gen 2 Evolutionary Benchmark Results (Recorded M3 Max Reference)](#gen-2-evolutionary-benchmark-results-recorded-m3-max-reference)
   - [Roofline Regime & Timing Stability (Recorded M3 Max Reference)](#roofline-regime--timing-stability-recorded-m3-max-reference)
-  - [Live GPU Results (TBD — Pending Live Test)](#live-gpu-results-tbd--to-be-updated-after-real-pc-gpu-test)
+  - [Live GPU Results (AMD Radeon 780M / RDNA-3 Silicon • Live Token Factory)](#live-gpu-results-amd-radeon-780m--rdna-3-silicon--live-token-factory)
 - [Quarantine Diagnostics & Failure Graveyard](#quarantine-diagnostics--failure-graveyard)
 - [Production Exports & Hardware Lockfile](#production-exports--hardware-lockfile)
 - [Verification & Benchmarking Methodology](#verification--benchmarking-methodology)
@@ -104,7 +104,7 @@ Vajra includes 5 core interactive controls accessible in 1 click:
 2. **Live Token Factory Mode:** Toggle to connect directly to NVIDIA Nemotron on Nebius Token Factory. Generates unique, live candidate shaders tailored to your hardware architecture. Requires `.env.local` with `NEBIUS_API_KEY`.
 3. **Simulate Compile Fail:** Checkbox injecting a compiler syntax error (`unresolved call target 'unknown_intrinsic_fn'`) into Variant C. Demonstrates Vajra's automatic guardrail system: Variant C is quarantined in the **Failure Graveyard**, Variant B is promoted to interim winner, and Gen 2 evolution uses the logged compiler fault to synthesize a valid kernel.
 4. **Preview No-WebGPU / Exit Reference Mode:** Toggles reference mode to preview how Vajra displays recorded Apple M3 Max benchmarks on non-WebGPU environments.
-5. **Refine Winner (Gen 2):** Triggers an evolutionary LLM feedback loop that feeds the Gen 1 winner's code, timing, and any compiler error logs back into Nemotron to synthesize **Variant D**, achieving +10.7% to +14.8% uplift over the Gen 1 winner.
+5. **Refine Winner (Gen 2):** Triggers an evolutionary LLM feedback loop that feeds the Gen 1 winner's code, timing, and any compiler error logs back into Nemotron to synthesize **Variant D**, achieving +10.7% to +14.8% uplift over the Gen 1 winner (Recorded M3 Max reference only). In live AMD RDNA-3 testing, Variant D encountered compile-time failures in SGEMM, Conv1D, and Sobel, while Softmax Variant D compiled and verified numerically but ran slower than the Gen 1 winner and was correctly retained without promotion.
 6. **Exported TS Dispatch Function:** Exports a zero-dependency TypeScript dispatch module (`runVerified_<workload>(device, ...)`). Note: Caller supplies initialized `GPUDevice` and `GPUBuffers` (not a standalone CLI script).
 
 ---
@@ -139,7 +139,7 @@ VAJRA_MOCK_MODE=false
 
 ## Verified Telemetry & Benchmarks
 
-> **Important:** All tables below represent **Recorded M3 Max Reference** benchmarks run on Apple M3 Max (40-core GPU) on Chrome 142 using WebGPU `TIMESTAMP_QUERY` query sets (3 warmup passes + 9 timed passes, median reported). A separate live testing table is provided with empty cells for your specific GPU.
+> **Important:** All tables below represent **Recorded M3 Max Reference** benchmarks run on Apple M3 Max (40-core GPU) on Chrome 142 using WebGPU `TIMESTAMP_QUERY` query sets (5 warmup passes + 9 timed passes, median reported). A separate live testing table is provided with empty cells for your specific GPU.
 
 ### Workload Specifications & Computational Complexity
 
@@ -217,12 +217,52 @@ $$\text{IQR} = \text{sorted}[6] - \text{sorted}[2], \quad \text{Stability \%} = 
 
 ### Live GPU Results (AMD Radeon 780M / RDNA-3 Silicon • Live Token Factory)
 
-| Workload | Target GPU Device | Baseline (GFLOPS) | Winner GFLOPS | Measured Speedup | Gen 2 Uplift | Verification Status |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **SGEMM** | `amd / rdna-3` (Live Token Factory) | 25.6 GFLOPS | **103.4 GFLOPS** (Winner B) | **4.04x** | Winner B Retained | **Verified** (`0.0` exact) |
-| **Softmax** | `amd / rdna-3` (Live Token Factory) | 0.08 GFLOPS | **1.89 GFLOPS** (Gen 2 D) | **25.13x** | **+221.8% vs Winner C** | **Verified** (`1.83e-6` < 1e-4) |
-| **Conv1D** | `amd / rdna-3` (Live Token Factory • single run, 9-run median per run) | 24.0 GFLOPS | **27.8 GFLOPS** (Winner A) | **1.16x** | — (Gen 1 Only) | **Verified** (< 1e-4) |
-| **Sobel** | `amd / rdna-3` (Live Token Factory • single run, 9-run median per run) | 30.7 GFLOPS | **32.2 GFLOPS** (Winner A) | **1.05x** | — (Gen 1 Only) | **Verified** (`0.0` exact) |
+> Single runs (9-run median per run), Live Token Factory, amd / rdna-3, 29 Oct 2026. Baselines and winners vary run to run.
+
+| Workload | Target GPU Device | Baseline (GFLOPS) | Winner GFLOPS | Measured Speedup | Gen 2 Variant D Status | Verification Status | Proof |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **SGEMM** | `amd / rdna-3` | 19.4 GFLOPS | **20.6 GFLOPS** (Winner A) | **1.07x** | Compile Error (`Line 13:1 unexpected token`) • Winner A Retained | **Verified** (`0.0` exact) | [Proof](screenshot-pack-2026-10-29/sgemm-gen2.jpg) |
+| **Softmax** | `amd / rdna-3` | 0.13 GFLOPS | **0.19 GFLOPS** (Winner B) | **1.47x** | 0.19 GFLOPS (1.43x, -2.4% vs B) • Verified (<1e-4) • Winner B Retained | **Verified** (`0.0` exact) | [Proof](screenshot-pack-2026-10-29/softmax-gen2.jpg) |
+| **Conv1D** | `amd / rdna-3` | 16.3 GFLOPS | **20.8 GFLOPS** (Winner A) | **1.28x** | Compile Error (`Line 22:21 unresolved 'lid'`) • Winner A Retained | **Verified** (`0.0` exact) | [Proof](screenshot-pack-2026-10-29/conv1d-gen2.jpg) |
+| **Sobel** | `amd / rdna-3` | 22.4 GFLOPS | **31.4 GFLOPS** (Winner A) | **1.40x** | Compile Error (`Line 33:107 expected ','`) • Winner A Retained | **Verified** (`0.0` exact) | [Proof](screenshot-pack-2026-10-29/sobel-gen2.jpg) |
+
+<details>
+<summary><strong>SGEMM Gen 2 Proof (AMD RDNA-3 Live Run)</strong></summary>
+
+<img src="screenshot-pack-2026-10-29/sgemm-gen2.jpg" width="720" alt="SGEMM Gen 2 Proof — Live Token Factory amd / rdna-3">
+
+* [View Gen 1 Screenshot](screenshot-pack-2026-10-29/sgemm-gen1.jpg)
+</details>
+
+<details>
+<summary><strong>Softmax Gen 2 Proof (AMD RDNA-3 Live Run)</strong></summary>
+
+<img src="screenshot-pack-2026-10-29/softmax-gen2.jpg" width="720" alt="Softmax Gen 2 Proof — Live Token Factory amd / rdna-3">
+
+* [View Gen 1 Screenshot](screenshot-pack-2026-10-29/softmax-gen1.jpg)
+</details>
+
+<details>
+<summary><strong>Conv1D Gen 2 Proof (AMD RDNA-3 Live Run)</strong></summary>
+
+<img src="screenshot-pack-2026-10-29/conv1d-gen2.jpg" width="720" alt="Conv1D Gen 2 Proof — Live Token Factory amd / rdna-3">
+
+* [View Gen 1 Screenshot](screenshot-pack-2026-10-29/conv1d-gen1.jpg)
+</details>
+
+<details>
+<summary><strong>Sobel Gen 2 Proof (AMD RDNA-3 Live Run)</strong></summary>
+
+<img src="screenshot-pack-2026-10-29/sobel-gen2.jpg" width="720" alt="Sobel Gen 2 Proof — Live Token Factory amd / rdna-3">
+
+* [View Gen 1 Screenshot](screenshot-pack-2026-10-29/sobel-gen1.jpg)
+</details>
+
+<details>
+<summary><strong>Vajra Interactive Architecture Guide Proof</strong></summary>
+
+<img src="screenshot-pack-2026-10-29/guide.jpg" width="720" alt="Vajra Guide Page Proof">
+</details>
 
 ---
 
@@ -298,7 +338,7 @@ Vajra provides 3 export options from the **Shader & Artifact Inspector**:
 2. **Numerical Verification:** Compares the candidate GPU output buffer against the verified baseline output buffer element-by-element:
    $$\text{RelError} = \frac{|y_{\text{candidate}} - y_{\text{baseline}}|}{|y_{\text{baseline}}| + 10^{-5}} < 10^{-4}$$
    Exact float equality (`===`) is never required due to non-associative FP32 reordering.
-3. **Timing Protocol:** Executes **3 un-timed warmup passes** to stabilize GPU clock frequencies and pipeline caches, followed by **9 timed measurement passes**. The **Median run** is reported (never best-of-9).
+3. **Timing Protocol:** Executes **5 un-timed warmup passes** to stabilize GPU clock frequencies and pipeline caches, followed by **9 timed measurement passes**. The **Median run** is reported (never best-of-9).
 4. **Hardware Timing:** Uses WebGPU `TIMESTAMP_QUERY` query sets when the `timestamp-query` feature is supported by the adapter. Falls back to wall-clock `queue.onSubmittedWorkDone()` timing if timestamp queries are blocked by browser privacy flags.
 5. **Derived Metrics:** Workgroup occupancy and memory throughput are **derived calculations** ($\text{bytes moved} / \text{median time}$), as WebGPU does not expose native hardware performance counters.
 
